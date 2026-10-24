@@ -13,6 +13,7 @@ import (
 
 	"github.com/Blacklotus89898/Tulip/internal/backtest"
 	"github.com/Blacklotus89898/Tulip/internal/marketdata"
+	"github.com/Blacklotus89898/Tulip/internal/strategy"
 	"github.com/Blacklotus89898/Tulip/internal/thorn"
 )
 
@@ -27,6 +28,8 @@ func runBacktest(args []string) error {
 	slippage := fs.Float64("slippage-bps", 10, "slippage per fill, basis points")
 	maxOrder := fs.Float64("max-order", 0, "Thorn per-order cap (0 = default 2500)")
 	sweep := fs.Bool("sweep", false, "also run neighbouring parameters (sensitivity only)")
+	compare := fs.Bool("compare", false, "compare momentum-v1 with the pre-registered allocators (same start, commission 0 and -commission-alt)")
+	commissionAlt := fs.Float64("commission-alt", 4.95, "second commission level for -compare")
 	cacheDir := fs.String("cache", "data/history", "on-disk bar cache (refetched after 24h)")
 	jsonOut := fs.String("json", "", "write the full result (trade log included) to this file")
 	_ = fs.Parse(args)
@@ -51,6 +54,9 @@ func runBacktest(args []string) error {
 		th.MaxOrderValue = *maxOrder
 	}
 	cfg := backtest.Config{Thorn: th, Cash: *cash, SlippageBps: *slippage, Commission: *commission}
+	if *compare {
+		return runCompare(bars, syms, cfg, []float64{*commission, *commissionAlt})
+	}
 	res, err := backtest.Run(bars, syms, cfg)
 	if err != nil {
 		return err
@@ -140,4 +146,89 @@ func printSweep(grid []*backtest.Result) {
 			pct(r.Strategy.CAGR), pct(r.Strategy.MaxDrawdown), r.Strategy.Sharpe, pct(r.Holdout["strategy"].CAGR), r.Trades, mark)
 	}
 	w.Flush()
+}
+
+// runCompare: every candidate on ONE common start (warmup 260 bars, enough for
+// 12-month lookbacks), judged on the held-out final 30%. The candidates were
+// chosen BEFORE seeing results; none is tuned. Thorn's caps are relaxed for
+// allocators (they hold up to 100% in one ETF) — this measures strategy
+// merit; live caps are re-tuned to whichever wins, a separate decision.
+func runCompare(bars map[string][]marketdata.Candle, syms []string, base backtest.Config, commissions []float64) error {
+	if len(syms) != 4 || syms[3] != "ZAG.TO" {
+		return fmt.Errorf("-compare expects the default universe ending in the bond ETF ZAG.TO")
+	}
+	risk, safe := syms[:3], syms[3]
+	relaxed := base.Thorn
+	relaxed.MaxOrderValue, relaxed.MaxPositionWeight = 1e12, 1
+	allocs := []strategy.Allocator{
+		strategy.EqualWeight{Symbols: syms},
+		strategy.TrendFilter{Risk: risk, Safe: safe},
+		strategy.DualMomentum{Risk: risk, Safe: safe},
+		strategy.InverseVol{Symbols: syms},
+	}
+	for _, com := range commissions {
+		fmt.Printf("\n=== commission %.2f per order · slippage %.0f bps · dividend-adjusted · fills next open ===\n", com, base.SlippageBps)
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.AlignRight)
+		fmt.Fprintln(w, "candidate\tCAGR\tMax DD\tSharpe\tHOLDOUT CAGR\tholdout DD\ttrades\texposure\t")
+		row := func(name string, r *backtest.Result) {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%.2f\t%s\t%s\t%d\t%.0f%%\t\n", name, pct(r.Strategy.CAGR), pct(r.Strategy.MaxDrawdown),
+				r.Strategy.Sharpe, pct(r.Holdout["strategy"].CAGR), pct(r.Holdout["strategy"].MaxDrawdown), r.Trades, r.Exposure*100)
+		}
+		var first *backtest.Result
+		for _, live := range []bool{true, false} {
+			c := base
+			c.Commission, c.Warmup = com, 260
+			name := "momentum-v1 (live caps)"
+			if !live {
+				c.Thorn, name = relaxed, "momentum-v1 (caps relaxed)"
+			}
+			r, err := backtest.Run(bars, syms, c)
+			if err != nil {
+				return err
+			}
+			row(name, r)
+			first = r
+		}
+		for _, a := range allocs {
+			c := base
+			c.Commission, c.Warmup, c.Thorn = com, 260, relaxed
+			r, err := backtest.RunAllocator(bars, syms, a, c)
+			if err != nil {
+				return fmt.Errorf("%s: %w", a.Name(), err)
+			}
+			row(a.Name(), r)
+		}
+		fmt.Fprintf(w, "buy & hold XIU (benchmark)\t%s\t%s\t%.2f\t%s\t%s\t1\t100%%\t\n", pct(first.BenchXIU.CAGR), pct(first.BenchXIU.MaxDrawdown),
+			first.BenchXIU.Sharpe, pct(first.Holdout["bench_buy_hold"].CAGR), pct(first.Holdout["bench_buy_hold"].MaxDrawdown))
+		fmt.Fprintf(w, "equal-weight hold (benchmark)\t%s\t%s\t%.2f\t%s\t%s\t4\t100%%\t\n", pct(first.BenchEqual.CAGR), pct(first.BenchEqual.MaxDrawdown),
+			first.BenchEqual.Sharpe, pct(first.Holdout["bench_equal_weight"].CAGR), pct(first.Holdout["bench_equal_weight"].MaxDrawdown))
+		w.Flush()
+		fmt.Printf("period %s → %s · holdout from %s\n", first.Start, first.End, first.Holdout["strategy"].From)
+		if com == commissions[0] {
+			fmt.Println("sensitivity (same rules, neighbouring lookbacks — robust = similar numbers):")
+			sw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.AlignRight)
+			srow := func(name string, r *backtest.Result) {
+				fmt.Fprintf(sw, "%s\t%s\t%s\t%.2f\t%s\t\n", name, pct(r.Strategy.CAGR), pct(r.Strategy.MaxDrawdown), r.Strategy.Sharpe, pct(r.Holdout["strategy"].CAGR))
+			}
+			fmt.Fprintln(sw, "variant\tCAGR\tMax DD\tSharpe\tholdout CAGR\t")
+			c := base
+			c.Commission, c.Warmup, c.Thorn = com, 320, relaxed
+			for _, lb := range []int{126, 189, 252, 315} {
+				r, err := backtest.RunAllocator(bars, syms, strategy.DualMomentum{Risk: risk, Safe: safe, Lookback: lb}, c)
+				if err != nil {
+					return err
+				}
+				srow(fmt.Sprintf("dual-momentum %dd", lb), r)
+			}
+			for _, d := range []int{100, 150, 200, 250} {
+				r, err := backtest.RunAllocator(bars, syms, strategy.TrendFilter{Risk: risk, Safe: safe, Days: d}, c)
+				if err != nil {
+					return err
+				}
+				srow(fmt.Sprintf("trend-filter %dd", d), r)
+			}
+			sw.Flush()
+		}
+	}
+	return nil
 }

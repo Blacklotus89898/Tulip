@@ -8,6 +8,7 @@ import (
 
 	"github.com/Blacklotus89898/Tulip/internal/calendar"
 	"github.com/Blacklotus89898/Tulip/internal/marketdata"
+	"github.com/Blacklotus89898/Tulip/internal/strategy"
 	"github.com/Blacklotus89898/Tulip/internal/thorn"
 )
 
@@ -107,4 +108,62 @@ func TestCommissionCostsShowUp(t *testing.T) {
 	if !(paid.FinalEquity < free.FinalEquity) {
 		t.Errorf("commission must cost: free %.2f vs paid %.2f", free.FinalEquity, paid.FinalEquity)
 	}
+}
+
+func relaxed(syms ...string) Config {
+	t := thorn.DefaultConfig()
+	t.Allowlist, t.MaxOrderValue, t.MaxPositionWeight = syms, 1e9, 1
+	return Config{Thorn: t, Warmup: 260}
+}
+
+func TestEqualWeightAllocatorTracksBuyAndHold(t *testing.T) {
+	up := series(600, func(i int) float64 { return 50 + 0.02*float64(i) })
+	bars := map[string][]marketdata.Candle{"AAA.TO": up, "XIU.TO": series(600, func(i int) float64 { return 40 + 0.01*float64(i) })}
+	syms := []string{"AAA.TO", "XIU.TO"}
+	res, err := RunAllocator(bars, syms, strategy.EqualWeight{Symbols: syms}, relaxed(syms...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Trades == 0 || res.Exposure < 0.9 {
+		t.Fatalf("equal weight should be ~fully invested: trades %d exposure %.2f (rejected %v)", res.Trades, res.Exposure, res.Rejected)
+	}
+	if d := math.Abs(res.Strategy.TotalReturn - res.BenchEqual.TotalReturn); d > 0.02 {
+		t.Errorf("rebalanced equal weight %.4f should be close to equal buy-and-hold %.4f", res.Strategy.TotalReturn, res.BenchEqual.TotalReturn)
+	}
+}
+
+func TestAllocatorNoLookahead(t *testing.T) {
+	mk := func(future float64) map[string][]marketdata.Candle {
+		a := series(600, upThenDown2)
+		if future > 0 {
+			for i := 450; i < len(a); i++ {
+				a[i].Open, a[i].High, a[i].Low, a[i].Close = future, future, future, future
+			}
+		}
+		return map[string][]marketdata.Candle{"AAA.TO": a, "ZAG.TO": series(600, func(int) float64 { return 20 }), "XIU.TO": series(600, func(int) float64 { return 50 })}
+	}
+	syms := []string{"AAA.TO", "ZAG.TO"}
+	alloc := strategy.TrendFilter{Risk: []string{"AAA.TO"}, Safe: "ZAG.TO"}
+	ra, _ := RunAllocator(mk(0), syms, alloc, relaxed(syms...))
+	rb, _ := RunAllocator(mk(500), syms, alloc, relaxed(syms...))
+	cut := key(series(600, upThenDown2)[449].Day)
+	upTo := func(ts []Trade) []Trade {
+		var out []Trade
+		for _, x := range ts {
+			if x.Signal < cut {
+				out = append(out, x)
+			}
+		}
+		return out
+	}
+	if len(upTo(ra.TradeLog)) == 0 || !reflect.DeepEqual(upTo(ra.TradeLog), upTo(rb.TradeLog)) {
+		t.Errorf("allocator decisions before %s depend on later bars", cut)
+	}
+}
+
+func upThenDown2(i int) float64 {
+	if i < 380 {
+		return 50 + 0.05*float64(i)
+	}
+	return 69 - 0.08*float64(i-380)
 }

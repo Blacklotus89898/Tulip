@@ -39,6 +39,8 @@ type Config struct {
 	Commission  float64 // per order, CAD (0 = commission-free ETFs)
 	Benchmark   string  // default XIU.TO
 	HoldoutFrac float64 // final fraction reported separately, default 0.3
+	Warmup      int     // minimum bars before the common start (comparisons share one start)
+	Band        float64 // allocators: skip a rebalance order if the weight is within this of target (default 0.03)
 }
 
 func (c Config) withDefaults() Config {
@@ -53,6 +55,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.HoldoutFrac == 0 {
 		c.HoldoutFrac = 0.3
+	}
+	if c.Band == 0 {
+		c.Band = 0.03
 	}
 	if c.Thorn.MaxOrderValue == 0 {
 		c.Thorn = thorn.DefaultConfig()
@@ -145,43 +150,10 @@ type pending struct {
 func Run(bars map[string][]marketdata.Candle, symbols []string, cfg Config) (*Result, error) {
 	cfg = cfg.withDefaults()
 	m := cfg.Strategy
-	need := warmup(m)
-	if _, ok := bars[cfg.Benchmark]; !ok {
-		return nil, fmt.Errorf("benchmark %s has no bars", cfg.Benchmark)
-	}
-	for s, b := range bars {
-		if len(b) > 10 {
-			gap := b[len(b)/2].Day.Sub(b[len(b)/2-1].Day).Hours() / 24
-			if gap > 5 {
-				return nil, fmt.Errorf("%s: bars are %.0f days apart — not daily data", s, gap)
-			}
-		}
-	}
-	// Index bars by day per symbol; common start = latest warmed-up day.
-	idx := map[string]map[string]int{}
-	var start time.Time
-	for _, s := range append(append([]string{}, symbols...), cfg.Benchmark) {
-		b := bars[s]
-		if len(b) <= need {
-			return nil, fmt.Errorf("%s: %d bars, need more than %d", s, len(b), need)
-		}
-		idx[s] = map[string]int{}
-		for i, c := range b {
-			idx[s][key(c.Day)] = i
-		}
-		if d := b[need-1].Day; d.After(start) {
-			start = d
-		}
-	}
-	// The trading calendar: benchmark days from the start.
-	var days []time.Time
-	for _, c := range bars[cfg.Benchmark] {
-		if !c.Day.Before(start) {
-			days = append(days, c.Day)
-		}
-	}
-	if len(days) < 30 {
-		return nil, errors.New("not enough common history")
+	need := max(warmup(m), cfg.Warmup)
+	idx, days, err := prepare(bars, symbols, cfg, need)
+	if err != nil {
+		return nil, err
 	}
 
 	cash := cfg.Cash
@@ -328,6 +300,195 @@ func Run(bars map[string][]marketdata.Candle, symbols []string, cfg Config) (*Re
 	res.Params = map[string]any{"mean_days": m.MeanDays, "return_days": m.ReturnDays, "vol_days": m.VolDays,
 		"target_vol": m.TargetVol, "max_weight": m.MaxWeight, "cash": cfg.Cash, "slippage_bps": cfg.SlippageBps,
 		"commission": cfg.Commission, "fill": "next day's open", "prices": "dividend-adjusted",
+		"thorn_max_order": cfg.Thorn.MaxOrderValue, "thorn_max_weight": cfg.Thorn.MaxPositionWeight}
+	return res, nil
+}
+
+// prepare checks the data is daily, indexes bars by day, and returns the
+// trading calendar (benchmark days) from the common warmed-up start.
+func prepare(bars map[string][]marketdata.Candle, symbols []string, cfg Config, need int) (map[string]map[string]int, []time.Time, error) {
+	if _, ok := bars[cfg.Benchmark]; !ok {
+		return nil, nil, fmt.Errorf("benchmark %s has no bars", cfg.Benchmark)
+	}
+	for s, b := range bars {
+		if len(b) > 10 {
+			gap := b[len(b)/2].Day.Sub(b[len(b)/2-1].Day).Hours() / 24
+			if gap > 5 {
+				return nil, nil, fmt.Errorf("%s: bars are %.0f days apart — not daily data", s, gap)
+			}
+		}
+	}
+	idx := map[string]map[string]int{}
+	var start time.Time
+	for _, s := range append(append([]string{}, symbols...), cfg.Benchmark) {
+		b := bars[s]
+		if len(b) <= need {
+			return nil, nil, fmt.Errorf("%s: %d bars, need more than %d", s, len(b), need)
+		}
+		idx[s] = map[string]int{}
+		for i, c := range b {
+			idx[s][key(c.Day)] = i
+		}
+		if d := b[need-1].Day; d.After(start) {
+			start = d
+		}
+	}
+	var days []time.Time
+	for _, c := range bars[cfg.Benchmark] {
+		if !c.Day.Before(start) {
+			days = append(days, c.Day)
+		}
+	}
+	if len(days) < 30 {
+		return nil, nil, errors.New("not enough common history")
+	}
+	return idx, days, nil
+}
+
+// RunAllocator simulates a portfolio-level strategy: on each month's last
+// trading day (completed bar) it computes target weights; the next day at the
+// open it rebalances — sells first, then buys within cash — skipping orders
+// whose weight is already within Band of target. Every order passes Thorn's
+// execute check.
+func RunAllocator(bars map[string][]marketdata.Candle, symbols []string, alloc strategy.Allocator, cfg Config) (*Result, error) {
+	cfg = cfg.withDefaults()
+	idx, days, err := prepare(bars, symbols, cfg, max(cfg.Warmup, 2))
+	if err != nil {
+		return nil, err
+	}
+	slip := cfg.SlippageBps / 10000
+	cash := cfg.Cash
+	held := map[string]int{}
+	lastClose := map[string]float64{}
+	equity := make([]float64, len(days))
+	invested := 0.0
+	var target map[string]float64
+	signal := ""
+	res := &Result{Symbols: symbols, Start: key(days[0]), End: key(days[len(days)-1]), Rejected: map[string]int{}}
+
+	for di, day := range days {
+		dk := key(day)
+		if target != nil {
+			px := map[string]float64{}
+			eqOpen := cash
+			for _, s := range symbols {
+				if i, ok := idx[s][dk]; ok {
+					px[s] = bars[s][i].Open
+				} else {
+					px[s] = lastClose[s]
+				}
+				eqOpen += float64(held[s]) * px[s]
+			}
+			type order struct {
+				s   string
+				qty int // + buy, − sell
+			}
+			var sells, buys []order
+			for _, s := range symbols {
+				if px[s] <= 0 {
+					continue
+				}
+				w := target[s]
+				cur := float64(held[s]) * px[s] / eqOpen
+				want := int(math.Floor(w * eqOpen / (px[s] * (1 + slip))))
+				if want == held[s] || (w > 0 && held[s] > 0 && math.Abs(cur-w) < cfg.Band) {
+					continue
+				}
+				if want < held[s] {
+					sells = append(sells, order{s, want - held[s]})
+				} else {
+					buys = append(buys, order{s, want - held[s]})
+				}
+			}
+			exec := func(o order) {
+				side, qty := "buy", o.qty
+				fill := px[o.s] * (1 + slip)
+				if o.qty < 0 {
+					side, qty, fill = "sell", -o.qty, px[o.s]*(1-slip)
+				}
+				if side == "buy" {
+					if afford := int(math.Floor((cash - cfg.Commission) / fill)); afford < qty {
+						qty = afford
+					}
+					if qty < 1 {
+						return
+					}
+				}
+				v := thorn.Check(cfg.Thorn, thorn.Request{Stage: thorn.Execute, Symbol: o.s, Side: side, Qty: qty,
+					Price: px[o.s], Held: held[o.s], Cash: cash, Equity: eqOpen})
+				if !v.Allowed {
+					for _, r := range v.Reasons {
+						res.Rejected["execute: "+reasonKey(r)]++
+					}
+					return
+				}
+				if side == "buy" {
+					cash -= float64(qty)*fill + cfg.Commission
+					held[o.s] += qty
+				} else {
+					cash += float64(qty)*fill - cfg.Commission
+					held[o.s] -= qty
+				}
+				res.TradeLog = append(res.TradeLog, Trade{Day: dk, Signal: signal, Symbol: o.s, Side: side, Qty: qty, Price: round4(fill), Fee: cfg.Commission})
+			}
+			for _, o := range sells {
+				exec(o)
+			}
+			for _, o := range buys {
+				exec(o)
+			}
+			target = nil
+		}
+		for s := range idx {
+			if i, ok := idx[s][dk]; ok {
+				lastClose[s] = bars[s][i].Close
+			}
+		}
+		eq := cash
+		for s, q := range held {
+			eq += float64(q) * lastClose[s]
+		}
+		equity[di] = eq
+		if eq > 0 {
+			invested += (eq - cash) / eq
+		}
+		// Month's last trading day → decide on completed bars.
+		if di+1 < len(days) && days[di+1].Month() != day.Month() {
+			hist := map[string][]marketdata.Candle{}
+			ok := true
+			for _, s := range symbols {
+				i, has := idx[s][dk]
+				if !has {
+					ok = false
+					break
+				}
+				hist[s] = bars[s][:i+1]
+			}
+			if ok {
+				t, err := alloc.Targets(hist)
+				if err != nil {
+					res.Rejected["targets: "+err.Error()]++
+				} else {
+					target, signal = t, dk
+				}
+			}
+		}
+	}
+
+	res.Trades = len(res.TradeLog)
+	res.Exposure = round4(invested / float64(len(days)))
+	res.FinalEquity = math.Round(equity[len(equity)-1]*100) / 100
+	bh := buyHold(bars, []string{cfg.Benchmark}, idx, days, cfg)
+	ew := buyHold(bars, symbols, idx, days, cfg)
+	res.Strategy, res.BenchXIU, res.BenchEqual = metrics(days, equity), metrics(days, bh), metrics(days, ew)
+	h := int(float64(len(days)) * (1 - cfg.HoldoutFrac))
+	res.Holdout = map[string]Metrics{
+		"strategy": metrics(days[h:], equity[h:]), "bench_buy_hold": metrics(days[h:], bh[h:]),
+		"bench_equal_weight": metrics(days[h:], ew[h:]),
+	}
+	res.Years = years(days, equity, bh, ew)
+	res.Params = map[string]any{"strategy": alloc.Name(), "rebalance": "monthly, next open", "band": cfg.Band,
+		"cash": cfg.Cash, "slippage_bps": cfg.SlippageBps, "commission": cfg.Commission, "prices": "dividend-adjusted",
 		"thorn_max_order": cfg.Thorn.MaxOrderValue, "thorn_max_weight": cfg.Thorn.MaxPositionWeight}
 	return res, nil
 }
