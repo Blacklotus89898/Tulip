@@ -163,3 +163,24 @@ func TestOutsideTheWindowNothingHappens(t *testing.T) {
 		t.Errorf("rebalanced outside the month's window: %v", p)
 	}
 }
+
+func TestPreviewIsReadOnly(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 12, 11, 0, 0, 0, calendar.Toronto) // outside the window: preview still works
+	l, d := harness(t, &now)
+	l.Hist = fakeHist{time.Date(2026, 11, 12, 0, 0, 0, 0, calendar.Toronto)}
+	p, unavailable, err := l.Preview(ctx)
+	if err != nil || p == nil {
+		t.Fatalf("preview = (%v, %v, %v)", p, unavailable, err)
+	}
+	if len(p.Buys) != 3 || p.Targets["XEF.TO"] != 0 {
+		t.Errorf("preview plan = %+v", p)
+	}
+	if pend := pendingBy(t, d); len(pend) != 0 {
+		t.Errorf("preview must not propose, got %v", pend)
+	}
+	evs, _ := d.J.ByKinds(ctx, KindTargets, "suggestion.created")
+	if len(evs) != 0 {
+		t.Errorf("preview journaled %d events", len(evs))
+	}
+}

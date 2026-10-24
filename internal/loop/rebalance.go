@@ -52,56 +52,14 @@ func (l *Loop) rebalance(ctx context.Context, cycle string, res *Result) error {
 		return nil // window passed; next month
 	}
 
-	hist := map[string][]marketdata.Candle{}
-	asOf := ""
-	for _, s := range l.Symbols {
-		bars, err := l.Hist.HistorySince(ctx, s, monthStart.AddDate(-2, 0, 0))
-		if err != nil {
-			res.Unavailable = append(res.Unavailable, s)
-			_, _ = j.Append(ctx, "data.unavailable", cycle, map[string]string{"symbol": s, "error": err.Error()})
-			return nil // fail closed: no partial rebalance on partial data
-		}
-		k := len(bars)
-		for k > 0 && !bars[k-1].Day.Before(monthStart) {
-			k--
-		}
-		hist[s] = bars[:k]
-		if k > 0 {
-			asOf = bars[k-1].Day.Format("2006-01-02")
-		}
+	p, err := l.plan(ctx, cycle, monthStart, res)
+	if err != nil || p == nil {
+		return err
 	}
-	targets, err := l.Allocator.Targets(hist)
-	if err != nil {
-		_, _ = j.Append(ctx, "strategy.skipped", cycle, map[string]string{"strategy": l.Allocator.Name(), "error": err.Error()})
-		return nil
-	}
-
-	book, equity, err := l.Desk.SizingBook(ctx, cycle)
-	if err != nil {
-		res.Unavailable = append(res.Unavailable, "account")
-		return nil
-	}
-	px := map[string]float64{}
-	held := map[string]int{}
-	for _, s := range l.Symbols {
-		q, err := l.MD.Quote(ctx, s)
-		if err != nil {
-			res.Unavailable = append(res.Unavailable, s)
-			_, _ = j.Append(ctx, "data.unavailable", cycle, map[string]string{"symbol": s, "error": err.Error()})
-			return nil
-		}
-		px[s] = q.Price
-		held[s] = book.Held(s)
-	}
-	// Equity at live quotes, not at cost.
-	equity = book.Cash
-	for s, q := range held {
-		equity += float64(q) * px[s]
-	}
+	targets, asOf, sells, buys := p.Targets, p.AsOf, p.Sells, p.Buys
 	_, _ = j.Append(ctx, KindTargets, cycle, map[string]any{"strategy": l.Allocator.Name(), "month": month,
-		"as_of": asOf, "targets": targets, "equity": equity})
+		"as_of": asOf, "targets": targets, "equity": p.Equity})
 
-	sells, buys := strategy.Rebalance(l.Symbols, targets, held, px, equity, l.band(), 0.001)
 	st, err := l.Desk.LoadState(ctx)
 	if err != nil {
 		return err
@@ -148,6 +106,93 @@ func (l *Loop) rebalance(ctx context.Context, cycle string, res *Result) error {
 		propose(o)
 	}
 	return nil
+}
+
+// Plan is what the allocator wants now and the orders that get there.
+type Plan struct {
+	Strategy string             `json:"strategy"`
+	AsOf     string             `json:"signals_as_of"`
+	Targets  map[string]float64 `json:"targets"`
+	Weights  map[string]float64 `json:"current_weights"`
+	Equity   float64            `json:"equity"`
+	Sells    []strategy.Order   `json:"sells"`
+	Buys     []strategy.Order   `json:"buys"`
+}
+
+// plan computes targets from bars completed BEFORE cutoff and the orders
+// from the current book at live quotes. nil plan (no error) = data
+// unavailable, already journaled (fail closed).
+func (l *Loop) plan(ctx context.Context, cycle string, cutoff time.Time, res *Result) (*Plan, error) {
+	j := l.Desk.J
+	hist := map[string][]marketdata.Candle{}
+	asOf := ""
+	for _, s := range l.Symbols {
+		bars, err := l.Hist.HistorySince(ctx, s, cutoff.AddDate(-2, 0, 0))
+		if err != nil {
+			res.Unavailable = append(res.Unavailable, s)
+			_, _ = j.Append(ctx, "data.unavailable", cycle, map[string]string{"symbol": s, "error": err.Error()})
+			return nil, nil // fail closed: no partial rebalance on partial data
+		}
+		k := len(bars)
+		for k > 0 && !bars[k-1].Day.Before(cutoff) {
+			k--
+		}
+		hist[s] = bars[:k]
+		if k > 0 {
+			asOf = bars[k-1].Day.Format("2006-01-02")
+		}
+	}
+	targets, err := l.Allocator.Targets(hist)
+	if err != nil {
+		_, _ = j.Append(ctx, "strategy.skipped", cycle, map[string]string{"strategy": l.Allocator.Name(), "error": err.Error()})
+		return nil, nil
+	}
+	book, _, err := l.Desk.SizingBook(ctx, cycle)
+	if err != nil {
+		res.Unavailable = append(res.Unavailable, "account")
+		return nil, nil
+	}
+	px := map[string]float64{}
+	held := map[string]int{}
+	for _, s := range l.Symbols {
+		q, err := l.MD.Quote(ctx, s)
+		if err != nil {
+			res.Unavailable = append(res.Unavailable, s)
+			_, _ = j.Append(ctx, "data.unavailable", cycle, map[string]string{"symbol": s, "error": err.Error()})
+			return nil, nil
+		}
+		px[s] = q.Price
+		held[s] = book.Held(s)
+	}
+	equity := book.Cash // at live quotes, not at cost
+	for s, q := range held {
+		equity += float64(q) * px[s]
+	}
+	weights := map[string]float64{}
+	for s, q := range held {
+		if q > 0 && equity > 0 {
+			weights[s] = float64(q) * px[s] / equity
+		}
+	}
+	sells, buys := strategy.Rebalance(l.Symbols, targets, held, px, equity, l.band(), 0.001)
+	return &Plan{Strategy: l.Allocator.Name(), AsOf: asOf, Targets: targets, Weights: weights, Equity: equity, Sells: sells, Buys: buys}, nil
+}
+
+// Preview is the plan from today's completed bars — read-only: nothing is
+// proposed or journaled except data errors.
+func (l *Loop) Preview(ctx context.Context) (*Plan, []string, error) {
+	if l.Allocator == nil {
+		return nil, nil, fmt.Errorf("no allocator configured (strategy %s)", l.StrategyName())
+	}
+	now := l.now().In(calendar.Toronto)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, calendar.Toronto)
+	cutoff := today
+	if calendar.SessionClosed(today, now) {
+		cutoff = today.AddDate(0, 0, 1) // today's bar is complete
+	}
+	var res Result
+	p, err := l.plan(ctx, "preview", cutoff, &res)
+	return p, res.Unavailable, err
 }
 
 func (l *Loop) band() float64 {

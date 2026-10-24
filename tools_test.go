@@ -13,7 +13,7 @@ import (
 var allowedTools = map[string]bool{
 	"tulip_status": true, "journal_list": true, "portfolio": true, "suggestions_pending": true,
 	"propose": true, "review_suggestion": true, "decline": true, "kill_switch_arm": true, "cycle_run": true,
-	"broker_account": true, // read-only (ADR 0003)
+	"broker_account": true, "rebalance_preview": true, // read-only
 }
 
 func TestMCPToolsAreAllowlisted(t *testing.T) {

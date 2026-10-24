@@ -116,6 +116,22 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			},
 		},
 		{
+			Name: "rebalance_preview",
+			Description: "READ-ONLY: what the allocator (default trend-filter-200) would target from today's completed " +
+				"bars, the book's current weights, and the orders that would get there. Proposes nothing — the live " +
+				"rebalance runs itself in the first 5 trading days of each month.",
+			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+				p, unavailable, err := lp.Preview(ctx)
+				if err != nil {
+					return "", err
+				}
+				if p == nil {
+					return pretty(map[string]any{"error": "data unavailable — failing closed", "unavailable": unavailable})
+				}
+				return pretty(p)
+			},
+		},
+		{
 			Name:        "suggestions_pending",
 			Description: "Suggestions waiting for the operator (paper: to approve; co-pilot: to place in Questrade), with their page path.",
 			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
