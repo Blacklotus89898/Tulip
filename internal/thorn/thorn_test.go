@@ -59,3 +59,17 @@ func TestThornReportsEveryReason(t *testing.T) {
 		t.Errorf("reasons = %v", v.Reasons)
 	}
 }
+
+func TestPerSymbolWeightOverride(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MaxOrderValue = 1e6
+	cfg.MaxWeightBySymbol = map[string]float64{"ZAG.TO": 1}
+	req := Request{Stage: Execute, Symbol: "ZAG.TO", Side: "buy", Qty: 600, Price: 15, Cash: 10000, Equity: 10000}
+	if v := Check(cfg, req); !v.Allowed {
+		t.Errorf("ZAG at 90%% must pass with a 100%% override: %v", v.Reasons)
+	}
+	req.Symbol, req.Qty, req.Price = "XIU.TO", 200, 45
+	if v := Check(cfg, req); v.Allowed {
+		t.Error("XIU at 90% must still hit the default 25% cap")
+	}
+}

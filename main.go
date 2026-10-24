@@ -58,7 +58,8 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address (pages, MCP, API)")
 	dbPath := flag.String("db", "data/tulip.db", "journal database path")
 	mode := flag.String("mode", envOr("TULIP_MODE", "paper"), "paper | copilot (read-only Questrade, ADR 0003)")
-	symbols := flag.String("symbols", "XIU.TO,VFV.TO,XEF.TO,ZAG.TO", "symbols the rules scan (must be on Thorn's allowlist)")
+	symbols := flag.String("symbols", "XIU.TO,VFV.TO,XEF.TO,ZAG.TO", "symbols the rules scan (must be on Thorn's allowlist); the LAST is the safe asset for trend-filter-200")
+	strat := flag.String("strategy", envOr("TULIP_STRATEGY", "trend-filter-200"), "trend-filter-200 | equal-weight (monthly rebalance) | momentum-v1 (retired, see docs/backtests)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -86,6 +87,25 @@ func main() {
 	envFloat(logger, "TULIP_THORN_MAX_ORDER_VALUE", &thornCfg.MaxOrderValue)
 	envFloat(logger, "TULIP_THORN_DAILY_LOSS_CAP", &thornCfg.DailyLossCap)
 	envFloat(logger, "TULIP_THORN_MAX_POSITION_WEIGHT", &thornCfg.MaxPositionWeight)
+	if v := os.Getenv("TULIP_THORN_MAX_SUGGESTIONS_PER_DAY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			thornCfg.MaxSuggestionsPerDay = n
+		}
+	}
+	// "ZAG.TO=1,XIU.TO=0.4": per-symbol position caps (the trend filter's
+	// safe asset may hold up to 100%).
+	for _, kv := range splitList(os.Getenv("TULIP_THORN_MAX_WEIGHT_BY_SYMBOL")) {
+		k, v, ok := strings.Cut(kv, "=")
+		f, err := strconv.ParseFloat(v, 64)
+		if !ok || err != nil || f <= 0 || f > 1 {
+			logger.Error("ignoring invalid TULIP_THORN_MAX_WEIGHT_BY_SYMBOL entry", "entry", kv)
+			continue
+		}
+		if thornCfg.MaxWeightBySymbol == nil {
+			thornCfg.MaxWeightBySymbol = map[string]float64{}
+		}
+		thornCfg.MaxWeightBySymbol[strings.TrimSpace(k)] = f
+	}
 	d := &desk.Desk{
 		J: j, MD: md, Broker: broker.Paper{SlippageBps: 10},
 		Cfg:            desk.Config{Thorn: thornCfg},
@@ -124,9 +144,23 @@ func main() {
 		logger.Error("fund books", "err", err)
 		os.Exit(1)
 	}
-	lp := &loop.Loop{Desk: d, MD: md, Strategy: strategy.Momentum{}, Symbols: splitList(*symbols), Log: logger}
+	lp := &loop.Loop{Desk: d, MD: md, Strategy: strategy.Momentum{}, Symbols: splitList(*symbols), Log: logger, Hist: md}
+	switch syms := lp.Symbols; *strat {
+	case "momentum-v1":
+	case "trend-filter-200":
+		if len(syms) < 2 {
+			logger.Error("trend-filter-200 needs risk symbols plus a safe one (last)")
+			os.Exit(2)
+		}
+		lp.Allocator = strategy.TrendFilter{Risk: syms[:len(syms)-1], Safe: syms[len(syms)-1]}
+	case "equal-weight":
+		lp.Allocator = strategy.EqualWeight{Symbols: syms}
+	default:
+		logger.Error("unknown -strategy", "strategy", *strat)
+		os.Exit(2)
+	}
 	_, _ = j.Append(ctx, "service.started", "", map[string]any{
-		"version": version, "mode": *mode, "symbols": lp.Symbols, "thorn": thornCfg,
+		"version": version, "mode": *mode, "symbols": lp.Symbols, "thorn": thornCfg, "strategy": lp.StrategyName(),
 		"approvals_enabled": passHash != "", "notify": pager.URL != "", "brain": lp.Brain != nil,
 	})
 	go lp.Run(ctx)
@@ -147,7 +181,7 @@ func main() {
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	logger.Info("tulip listening", "addr", *addr, "db", *dbPath, "mode", *mode, "version", version,
+	logger.Info("tulip listening", "addr", *addr, "db", *dbPath, "mode", *mode, "strategy", lp.StrategyName(), "version", version,
 		"mcp", token != "", "approvals", passHash != "", "notify", pager.URL != "")
 
 	select {

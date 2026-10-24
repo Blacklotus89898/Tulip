@@ -17,14 +17,19 @@ import (
 // are missing — raw closes would understate dividend-paying ETFs (ZAG, XIU)
 // and silently skew any comparison.
 func (y *Yahoo) History(ctx context.Context, symbol string) ([]Candle, error) {
+	return y.HistorySince(ctx, symbol, time.Unix(0, 0))
+}
+
+// HistorySince is History from a start time (the live allocator needs ~2y).
+func (y *Yahoo) HistorySince(ctx context.Context, symbol string, since time.Time) ([]Candle, error) {
 	base := y.Base
 	if base == "" {
 		base = "https://query1.finance.yahoo.com"
 	}
 	// Explicit period1/period2: range=max silently downgrades long histories
 	// to monthly bars (dataGranularity) — checked below too.
-	u := fmt.Sprintf("%s/v8/finance/chart/%s?period1=0&period2=%d&interval=1d&events=div%%7Csplit",
-		base, url.PathEscape(symbol), y.now().Unix())
+	u := fmt.Sprintf("%s/v8/finance/chart/%s?period1=%d&period2=%d&interval=1d&events=div%%7Csplit",
+		base, url.PathEscape(symbol), since.Unix(), y.now().Unix())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err

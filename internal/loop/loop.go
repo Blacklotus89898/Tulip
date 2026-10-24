@@ -39,8 +39,13 @@ type Loop struct {
 	Strategy strategy.Momentum
 	Symbols  []string // what the rules scan (subset of Thorn's allowlist)
 	Brain    Reviewer // optional
-	Log      *slog.Logger
-	Now      func() time.Time
+	// Allocator, when set, replaces the per-symbol strategy: a monthly
+	// rebalance towards its targets (backtested: Tulip docs/backtests).
+	Allocator strategy.Allocator
+	Hist      HistorySource // adjusted history for the allocator
+	Band      float64       // rebalance drift band (default 0.03)
+	Log       *slog.Logger
+	Now       func() time.Time
 	// RunAt are the Toronto wall-clock cycle times on trading days.
 	RunAt []string // default 10:05, 15:00
 }
@@ -94,6 +99,9 @@ func (l *Loop) Cycle(ctx context.Context, trigger string) (Result, error) {
 		_, _ = j.Append(ctx, "data.unavailable", cycle, map[string]string{"symbol": "benchmark", "error": err.Error()})
 	}
 	_ = l.Desk.Mark(ctx)
+	if l.Allocator != nil {
+		return res, l.rebalance(ctx, cycle, &res)
+	}
 
 	// Sizing comes from the real account in co-pilot mode (ADR 0003): if it
 	// can't be read, propose nothing.

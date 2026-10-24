@@ -20,12 +20,15 @@ const (
 
 // Config holds the limits. All money in the account currency (CAD).
 type Config struct {
-	Allowlist            []string // symbols Tulip may trade
-	MaxOrderValue        float64  // per order
-	MaxPositionWeight    float64  // post-trade position value / equity
-	DailyLossCap         float64  // positive number; below -cap, buys are blocked
-	ConfidenceFloor      float64  // applies only when a confidence is present
-	MaxSuggestionsPerDay int      // propose stage only
+	Allowlist         []string // symbols Tulip may trade
+	MaxOrderValue     float64  // per order
+	MaxPositionWeight float64  // post-trade position value / equity
+	// MaxWeightBySymbol overrides MaxPositionWeight per symbol — e.g. the
+	// bond ETF a trend filter rotates into may hold up to 100%.
+	MaxWeightBySymbol    map[string]float64
+	DailyLossCap         float64 // positive number; below -cap, buys are blocked
+	ConfidenceFloor      float64 // applies only when a confidence is present
+	MaxSuggestionsPerDay int     // propose stage only
 }
 
 // DefaultConfig is conservative on purpose.
@@ -88,9 +91,15 @@ func Check(cfg Config, r Request) Verdict {
 		if value > r.Cash {
 			fail("order value %.2f exceeds cash %.2f", value, r.Cash)
 		}
-		if r.Equity > 0 && float64(r.Held+r.Qty)*r.Price/r.Equity > cfg.MaxPositionWeight {
+		capW := cfg.MaxPositionWeight
+		for sym, w := range cfg.MaxWeightBySymbol {
+			if strings.EqualFold(sym, r.Symbol) {
+				capW = w
+			}
+		}
+		if r.Equity > 0 && float64(r.Held+r.Qty)*r.Price/r.Equity > capW {
 			fail("position would be %.0f%% of equity (cap %.0f%%)",
-				100*float64(r.Held+r.Qty)*r.Price/r.Equity, 100*cfg.MaxPositionWeight)
+				100*float64(r.Held+r.Qty)*r.Price/r.Equity, 100*capW)
 		}
 		if r.DayPnL < -cfg.DailyLossCap {
 			fail("daily loss %.2f is past the cap %.2f — buys are blocked, sells still allowed", -r.DayPnL, cfg.DailyLossCap)

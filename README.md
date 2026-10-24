@@ -35,9 +35,25 @@ Full reasoning in [ADR 0001](docs/adr/0001-architecture.md).
 
 ## Operating it (v1, paper)
 
+- **Strategy:** `trend-filter-200` (default, `-strategy`/`TULIP_STRATEGY`):
+  equal thirds in XIU/VFV/XEF, each one's share moved to ZAG while it trades
+  below its 200-day mean, rebalanced **monthly**. Chosen by backtest
+  ([docs/backtests](docs/backtests/README.md)): it matches equal-weight
+  buy-and-hold with a slightly shallower drawdown and is robust to its
+  lookback; `momentum-v1` was retired (whipsaw, ~2%/yr). `equal-weight` is
+  the plain alternative. Reproduce: `go run . backtest -compare`.
 - **Cycles** run at 10:05 and 15:00 Toronto on TSX trading days (or on demand
-  via the `cycle_run` MCP tool): completed daily bars → `momentum-v1` → Thorn →
-  a pending **suggestion**, paged to ntfy topic `tulip-approvals`.
+  via the `cycle_run` MCP tool). During the **first 5 trading days of a
+  month** the allocator computes targets from bars completed by month-end
+  (dividend-adjusted, as backtested) and the shared `strategy.Rebalance`
+  turns them into orders: **sells first, buys once no sell is pending**, a 3%
+  drift band, never two suggestions for one symbol. Each passes Thorn and
+  becomes a pending **suggestion** paged to ntfy topic `tulip-approvals`. On
+  target → `rebalance.done` for the month.
+- **Thorn knobs** (env): `TULIP_THORN_MAX_ORDER_VALUE`,
+  `TULIP_THORN_DAILY_LOSS_CAP`, `TULIP_THORN_MAX_POSITION_WEIGHT`,
+  `TULIP_THORN_MAX_WEIGHT_BY_SYMBOL` (e.g. `ZAG.TO=1`),
+  `TULIP_THORN_MAX_SUGGESTIONS_PER_DAY`.
 - **Approve** on the page the notification links to (`/approve/<id>`), with
   **your passphrase**. It executes at once — only during TSX hours, at a fresh
   quote newer than the signal bar, inside the price band, after Thorn re-checks.

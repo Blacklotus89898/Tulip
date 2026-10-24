@@ -45,7 +45,7 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 					mode, approvalHow = "copilot", "the operator places every order in Questrade; Tulip only reads the account"
 				}
 				out := map[string]any{
-					"version": version, "mode": mode, "approval": approvalHow,
+					"version": version, "mode": mode, "approval": approvalHow, "strategy": lp.StrategyName(),
 					"market_open": open, "kill_switch": st.KillSwitch, "kill_reason": st.KillReason,
 					"pending": len(st.Pending), "approvals_enabled": d.PassphraseHash != "",
 					"brain": lp.Brain != nil, "journal_events": counts,
@@ -222,7 +222,7 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 		},
 		{
 			Name:        "cycle_run",
-			Description: "Run one observe → rules → Thorn → suggest cycle now (only creates suggestions; outside TSX hours it only expires stale ones).",
+			Description: "Run one observe → rules → Thorn → suggest cycle now (only creates suggestions; outside TSX hours it only expires stale ones). With an allocator (default trend-filter-200) it works on the month's rebalance during the first 5 trading days.",
 			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
 				res, err := lp.Cycle(ctx, "mcp")
 				if err != nil {

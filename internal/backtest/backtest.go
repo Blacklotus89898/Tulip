@@ -379,32 +379,12 @@ func RunAllocator(bars map[string][]marketdata.Candle, symbols []string, alloc s
 				}
 				eqOpen += float64(held[s]) * px[s]
 			}
-			type order struct {
-				s   string
-				qty int // + buy, − sell
-			}
-			var sells, buys []order
-			for _, s := range symbols {
-				if px[s] <= 0 {
-					continue
-				}
-				w := target[s]
-				cur := float64(held[s]) * px[s] / eqOpen
-				want := int(math.Floor(w * eqOpen / (px[s] * (1 + slip))))
-				if want == held[s] || (w > 0 && held[s] > 0 && math.Abs(cur-w) < cfg.Band) {
-					continue
-				}
-				if want < held[s] {
-					sells = append(sells, order{s, want - held[s]})
-				} else {
-					buys = append(buys, order{s, want - held[s]})
-				}
-			}
-			exec := func(o order) {
-				side, qty := "buy", o.qty
-				fill := px[o.s] * (1 + slip)
-				if o.qty < 0 {
-					side, qty, fill = "sell", -o.qty, px[o.s]*(1-slip)
+			sells, buys := strategy.Rebalance(symbols, target, held, px, eqOpen, cfg.Band, slip)
+			exec := func(o strategy.Order) {
+				side, qty := "buy", o.Qty
+				fill := px[o.Symbol] * (1 + slip)
+				if o.Qty < 0 {
+					side, qty, fill = "sell", -o.Qty, px[o.Symbol]*(1-slip)
 				}
 				if side == "buy" {
 					if afford := int(math.Floor((cash - cfg.Commission) / fill)); afford < qty {
@@ -414,8 +394,8 @@ func RunAllocator(bars map[string][]marketdata.Candle, symbols []string, alloc s
 						return
 					}
 				}
-				v := thorn.Check(cfg.Thorn, thorn.Request{Stage: thorn.Execute, Symbol: o.s, Side: side, Qty: qty,
-					Price: px[o.s], Held: held[o.s], Cash: cash, Equity: eqOpen})
+				v := thorn.Check(cfg.Thorn, thorn.Request{Stage: thorn.Execute, Symbol: o.Symbol, Side: side, Qty: qty,
+					Price: px[o.Symbol], Held: held[o.Symbol], Cash: cash, Equity: eqOpen})
 				if !v.Allowed {
 					for _, r := range v.Reasons {
 						res.Rejected["execute: "+reasonKey(r)]++
@@ -424,12 +404,12 @@ func RunAllocator(bars map[string][]marketdata.Candle, symbols []string, alloc s
 				}
 				if side == "buy" {
 					cash -= float64(qty)*fill + cfg.Commission
-					held[o.s] += qty
+					held[o.Symbol] += qty
 				} else {
 					cash += float64(qty)*fill - cfg.Commission
-					held[o.s] -= qty
+					held[o.Symbol] -= qty
 				}
-				res.TradeLog = append(res.TradeLog, Trade{Day: dk, Signal: signal, Symbol: o.s, Side: side, Qty: qty, Price: round4(fill), Fee: cfg.Commission})
+				res.TradeLog = append(res.TradeLog, Trade{Day: dk, Signal: signal, Symbol: o.Symbol, Side: side, Qty: qty, Price: round4(fill), Fee: cfg.Commission})
 			}
 			for _, o := range sells {
 				exec(o)
