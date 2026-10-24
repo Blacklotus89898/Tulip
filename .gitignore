@@ -1,6 +1,7 @@
 # binaries
 /tulip
-/tulip.exe
+# Windows builds (Tulip.exe vs tulip.exe: case only matched on Windows)
+*.exe
 
 # local state: journal DBs, run data
 /data/
