@@ -1,0 +1,17 @@
+# binaries
+/tulip
+/tulip.exe
+
+# local state: journal DBs, run data
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# secrets never live here anyway (.env is for local dev only)
+.env
+
+# editors / OS
+.idea/
+.vscode/
+Thumbs.db
