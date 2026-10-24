@@ -47,6 +47,7 @@ type Client struct {
 	expires   time.Time
 	broken    bool
 	loaded    bool
+	bootHash  string // set while the sealed bootstrap is unproven; recorded after its first successful refresh
 }
 
 const (
@@ -84,10 +85,9 @@ func (c *Client) load() error {
 	lastBoot, _ := os.ReadFile(filepath.Join(c.StateDir, bootFile))
 	switch {
 	case c.Bootstrap != "" && hashOf(c.Bootstrap) != strings.TrimSpace(string(lastBoot)):
-		c.refresh = c.Bootstrap
-		if err := writeAtomic(filepath.Join(c.StateDir, bootFile), []byte(hashOf(c.Bootstrap))); err != nil {
-			return fmt.Errorf("questrade: record bootstrap: %w", err)
-		}
+		// Recorded only once a refresh with it succeeded: a failed first
+		// attempt (then a restart) must try the sealed token again.
+		c.refresh, c.bootHash = c.Bootstrap, hashOf(c.Bootstrap)
 	case len(persisted) > 0:
 		c.refresh = strings.TrimSpace(string(persisted))
 	default:
@@ -196,6 +196,13 @@ func (c *Client) ensure(ctx context.Context, force bool) (string, string, error)
 		return "", "", ErrBroken
 	}
 	c.refresh = tr.RefreshToken
+	if c.bootHash != "" {
+		// The bootstrap is proven and spent; from now on the persisted token
+		// is the chain. Best effort: on failure it is retried next refresh.
+		if writeAtomic(filepath.Join(c.StateDir, bootFile), []byte(c.bootHash)) == nil {
+			c.bootHash = ""
+		}
+	}
 	c.access = tr.AccessToken
 	c.apiServer = strings.TrimRight(tr.APIServer, "/") + "/"
 	c.expires = c.now().Add(time.Duration(tr.ExpiresIn) * time.Second)

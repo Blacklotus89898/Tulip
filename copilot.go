@@ -25,6 +25,7 @@ type questradeAccount struct {
 	j      *journal.Journal
 
 	authOK   atomic.Int32 // 1 ok, 0 failing, -1 not tried yet
+	lastOK   atomic.Int64 // unix seconds of the last successful call
 	mu       sync.Mutex
 	verified bool
 }
@@ -40,6 +41,7 @@ func (a *questradeAccount) note(ctx context.Context, err error) {
 	authErr := errors.Is(err, questrade.ErrAuth) || errors.Is(err, questrade.ErrBroken) || errors.Is(err, questrade.ErrNotConfigured)
 	switch {
 	case err == nil:
+		a.lastOK.Store(time.Now().Unix())
 		if a.authOK.Swap(1) != 1 {
 			_, _ = a.j.Append(ctx, "broker.auth_ok", "", map[string]string{"broker": "questrade"})
 		}
@@ -124,11 +126,15 @@ func reconcileLoop(ctx context.Context, d *desk.Desk, a *questradeAccount, every
 		case <-t.C:
 		}
 		now := time.Now().In(calendar.Toronto)
-		if ok, err := calendar.IsTradingDay(now); err != nil || !ok {
-			continue
-		}
 		open, close := calendar.SessionBounds(now)
-		if now.Before(open) || now.After(close.Add(time.Hour)) {
+		trading, err := calendar.IsTradingDay(now)
+		if err != nil || !trading || now.Before(open) || now.After(close.Add(time.Hour)) {
+			// Off hours: keep the token chain alive (an unused refresh token
+			// dies after ~7 days) and the auth gauge current, once a day.
+			if time.Since(time.Unix(a.lastOK.Load(), 0)) > 20*time.Hour {
+				_, kerr := a.c.Accounts(ctx)
+				a.note(ctx, kerr)
+			}
 			continue
 		}
 		if n, err := reconcileOnce(ctx, d, a, now); err != nil {

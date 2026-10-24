@@ -175,6 +175,10 @@ func (d *Desk) Reconcile(ctx context.Context, execs []Execution) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	actedOrders, err := d.actedOrders(ctx)
+	if err != nil {
+		return 0, err
+	}
 	ids := make([]string, 0, len(orders))
 	for id := range orders {
 		ids = append(ids, id)
@@ -186,6 +190,14 @@ func (d *Desk) Reconcile(ctx context.Context, execs []Execution) (int, error) {
 		if _, err := d.J.Append(ctx, KindBrokerExecution, "", o); err != nil {
 			return 0, err
 		}
+		// A later partial fill of an order already attributed (an earlier
+		// poll) belongs to the same suggestion.
+		if a, ok := actedOrders[o.OrderID]; ok {
+			if _, err := d.J.Append(ctx, KindSuggestionActed, "", acted(a.id, a.ref, 0, o, true)); err != nil {
+				return 0, err
+			}
+			continue
+		}
 		s := matchSuggestion(st.Pending, o)
 		if s == nil {
 			// Placed before the session closed but polled after the
@@ -195,19 +207,10 @@ func (d *Desk) Reconcile(ctx context.Context, execs []Execution) (int, error) {
 			}
 		}
 		if s != nil {
-			slip := 0.0
-			if s.RefPrice > 0 {
-				slip = (o.AvgPrice - s.RefPrice) / s.RefPrice
-				if o.Side == "sell" {
-					slip = -slip
-				}
-			}
-			if _, err := d.J.Append(ctx, KindSuggestionActed, "", map[string]any{
-				"id": s.ID, "order_id": o.OrderID, "suggested_qty": s.Qty, "filled_qty": o.Qty,
-				"ref_price": s.RefPrice, "avg_price": o.AvgPrice, "slippage": math.Round(slip*1e5) / 1e5,
-			}); err != nil {
+			if _, err := d.J.Append(ctx, KindSuggestionActed, "", acted(s.ID, s.RefPrice, s.Qty, o, false)); err != nil {
 				return 0, err
 			}
+			actedOrders[o.OrderID] = actedRef{s.ID, s.RefPrice}
 			sid := s.ID
 			st.Pending, st.Expired = removeID(st.Pending, sid), removeID(st.Expired, sid)
 			continue
@@ -217,6 +220,53 @@ func (d *Desk) Reconcile(ctx context.Context, execs []Execution) (int, error) {
 		}
 	}
 	return len(orders), nil
+}
+
+type actedRef struct {
+	id  string
+	ref float64
+}
+
+func acted(id string, ref float64, suggestedQty int, o *OrderFill, followUp bool) map[string]any {
+	slip := 0.0
+	if ref > 0 {
+		slip = (o.AvgPrice - ref) / ref
+		if o.Side == "sell" {
+			slip = -slip
+		}
+	}
+	m := map[string]any{
+		"id": id, "order_id": o.OrderID, "filled_qty": o.Qty, "ref_price": ref,
+		"avg_price": o.AvgPrice, "fees": o.Fees, "slippage": math.Round(slip*1e5) / 1e5,
+	}
+	if followUp {
+		m["follow_up"] = true
+	} else {
+		m["suggested_qty"] = suggestedQty
+	}
+	return m
+}
+
+// actedOrders maps broker order ids already attributed to their suggestion.
+func (d *Desk) actedOrders(ctx context.Context) (map[string]actedRef, error) {
+	evs, err := d.J.ByKinds(ctx, KindSuggestionActed)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]actedRef{}
+	for _, e := range evs {
+		var m struct {
+			ID      string  `json:"id"`
+			OrderID string  `json:"order_id"`
+			Ref     float64 `json:"ref_price"`
+		}
+		if json.Unmarshal(e.Payload, &m) == nil && m.OrderID != "" {
+			if _, seen := out[m.OrderID]; !seen {
+				out[m.OrderID] = actedRef{m.ID, m.Ref}
+			}
+		}
+	}
+	return out, nil
 }
 
 func matchSuggestion(pending []Suggestion, o *OrderFill) *Suggestion {
@@ -250,20 +300,57 @@ func sessionClose(now time.Time, ttl time.Duration) time.Time {
 	return now.Add(ttl)
 }
 
-// Attributed sums the strategy's real record in co-pilot mode: matched orders
-// only (manual trades excluded), as P&L-free facts for the scorecard.
+// Attributed is the strategy's real record in co-pilot mode: one row per
+// broker order matched to a suggestion (partials across polls summed; manual
+// trades excluded), as facts for the scorecard.
 func (d *Desk) Attributed(ctx context.Context) ([]map[string]any, error) {
 	evs, err := d.J.ByKinds(ctx, KindSuggestionActed)
 	if err != nil {
 		return nil, err
 	}
-	out := []map[string]any{}
+	type agg struct {
+		id, order          string
+		ref, qty, cost, fe float64
+		suggested          int
+		first              string
+	}
+	byOrder := map[string]*agg{}
+	var order []string
 	for _, e := range evs {
-		var m map[string]any
-		if json.Unmarshal(e.Payload, &m) == nil {
-			m["at"] = e.TS
-			out = append(out, m)
+		var m struct {
+			ID        string  `json:"id"`
+			OrderID   string  `json:"order_id"`
+			Ref       float64 `json:"ref_price"`
+			Qty       float64 `json:"filled_qty"`
+			Avg       float64 `json:"avg_price"`
+			Fees      float64 `json:"fees"`
+			Suggested int     `json:"suggested_qty"`
 		}
+		if json.Unmarshal(e.Payload, &m) != nil {
+			continue
+		}
+		a, ok := byOrder[m.OrderID]
+		if !ok {
+			a = &agg{id: m.ID, order: m.OrderID, ref: m.Ref, first: e.TS}
+			byOrder[m.OrderID] = a
+			order = append(order, m.OrderID)
+		}
+		a.qty += m.Qty
+		a.cost += m.Qty * m.Avg
+		a.fe += m.Fees
+		if m.Suggested > 0 {
+			a.suggested = m.Suggested
+		}
+	}
+	out := []map[string]any{}
+	for _, id := range order {
+		a := byOrder[id]
+		avg := 0.0
+		if a.qty > 0 {
+			avg = math.Round(a.cost/a.qty*10000) / 10000
+		}
+		out = append(out, map[string]any{"id": a.id, "order_id": a.order, "suggested_qty": a.suggested,
+			"filled_qty": a.qty, "ref_price": a.ref, "avg_price": avg, "fees": a.fe, "at": a.first})
 	}
 	return out, nil
 }

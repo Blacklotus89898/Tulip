@@ -146,3 +146,29 @@ func TestCoPilotDailyLossCapUsesTheRealAccount(t *testing.T) {
 		t.Errorf("broker.mark journaled %d times, want once per day", n)
 	}
 }
+
+func TestPartialFillsAcrossPollsStayAttributed(t *testing.T) {
+	ctx := context.Background()
+	h := copilotHarness(t, &fakeAccount{snap: &Snapshot{Cash: 5000, Equity: 5000, Held: map[string]int{}}})
+	s := h.proposeBuy(t, 4)
+	at := h.now.Add(10 * time.Minute)
+	if _, err := h.d.Reconcile(ctx, []Execution{{ID: "e1", OrderID: "o1", Symbol: "XIU.TO", Side: "buy", Qty: 1, Price: 50, At: at}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.d.Reconcile(ctx, []Execution{
+		{ID: "e1", OrderID: "o1", Symbol: "XIU.TO", Side: "buy", Qty: 1, Price: 50, At: at}, // seen again
+		{ID: "e2", OrderID: "o1", Symbol: "XIU.TO", Side: "buy", Qty: 3, Price: 50.4, At: at.Add(3 * time.Minute)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(kinds(t, h, KindManualTrade)); n != 0 {
+		t.Fatalf("a later partial of an attributed order became %d manual trade(s)", n)
+	}
+	rows, err := h.d.Attributed(ctx)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("attributed = (%v, %v), want one row per order", rows, err)
+	}
+	if r := rows[0]; r["id"] != s.ID || r["filled_qty"].(float64) != 4 || r["avg_price"].(float64) != 50.3 || r["suggested_qty"].(int) != 4 {
+		t.Errorf("attributed row = %v (want qty 4, avg 50.3)", r)
+	}
+}

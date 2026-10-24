@@ -24,6 +24,7 @@ type fakeQuestrade struct {
 	valid    map[string]bool // unspent refresh tokens
 	n        int
 	refreshs atomic.Int32
+	failNext atomic.Bool // next login request answers 503 (transient)
 	api      *httptest.Server
 	login    *httptest.Server
 }
@@ -53,6 +54,10 @@ func newFake(t *testing.T, first string) *fakeQuestrade {
 	}))
 	f.login = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.refreshs.Add(1)
+		if f.failNext.Swap(false) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		rt := r.URL.Query().Get("refresh_token")
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -191,5 +196,23 @@ func TestErrorsNeverCarryTokens(t *testing.T) {
 	}
 	if !(&Client{StateDir: t.TempDir()}).Configured() == false {
 		t.Error("no token anywhere → not configured")
+	}
+}
+
+func TestFailedFirstBootstrapIsRetriedAfterRestart(t *testing.T) {
+	f := newFake(t, "boot-1")
+	dir := t.TempDir()
+	f.failNext.Store(true)
+	if _, err := client(f, dir, "boot-1").Accounts(context.Background()); err == nil {
+		t.Fatal("the transient failure should surface")
+	}
+	// Restart (new client, same sealed value): the unproven bootstrap must be
+	// tried again, not skipped as "already bootstrapped".
+	if _, err := client(f, dir, "boot-1").Accounts(context.Background()); err != nil {
+		t.Fatalf("bootstrap not retried after a failed first refresh: %v", err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, bootFile))
+	if strings.TrimSpace(string(raw)) != hashOf("boot-1") {
+		t.Error("bootstrap hash must be recorded after the successful refresh")
 	}
 }
