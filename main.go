@@ -5,6 +5,7 @@
 //	tulip [flags]                 run the service
 //	tulip hash-passphrase         read a passphrase on stdin, print its hash
 //	                              (for TULIP_APPROVAL_PASSPHRASE_HASH)
+//	tulip backtest [-sweep] ...   replay momentum-v1 + Thorn on adjusted history
 package main
 
 import (
@@ -45,6 +46,13 @@ var version = "dev"
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "hash-passphrase" {
 		hashPassphrase()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "backtest" {
+		if err := runBacktest(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "backtest:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	addr := flag.String("addr", ":8080", "listen address (pages, MCP, API)")
