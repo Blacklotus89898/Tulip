@@ -109,7 +109,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","version":%q,"mode":%q}`+"\n", version, *mode)
 	})
-	mux.HandleFunc("GET /metrics", metricsHandler(j))
+	mux.HandleFunc("GET /metrics", metricsHandler(j, d))
 	mux.Handle("POST /mcp", requireToken(token, mcp.New("tulip", version, tools(d, lp, j)...)))
 	web.Register(mux, d) // the operator's approval page (passphrase-gated)
 
@@ -184,7 +184,7 @@ func requireToken(token string, next http.Handler) http.Handler {
 	})
 }
 
-func metricsHandler(j *journal.Journal) http.HandlerFunc {
+func metricsHandler(j *journal.Journal, d *desk.Desk) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		counts, err := j.Counts(r.Context())
 		if err != nil {
@@ -202,6 +202,14 @@ func metricsHandler(j *journal.Journal) http.HandlerFunc {
 			fmt.Fprintf(&b, "tulip_journal_events_total{kind=\"%s\"} %d\n", strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(k), counts[k])
 		}
 		fmt.Fprintf(&b, "# HELP tulip_build_info Running build.\n# TYPE tulip_build_info gauge\ntulip_build_info{version=\"%s\"} 1\n", version)
+		if st, err := d.LoadState(r.Context()); err == nil {
+			kill := 0
+			if st.KillSwitch {
+				kill = 1
+			}
+			fmt.Fprintf(&b, "# HELP tulip_kill_switch 1 while the kill switch is armed.\n# TYPE tulip_kill_switch gauge\ntulip_kill_switch %d\n", kill)
+			fmt.Fprintf(&b, "# HELP tulip_suggestions_pending Suggestions awaiting the operator.\n# TYPE tulip_suggestions_pending gauge\ntulip_suggestions_pending %d\n", len(st.Pending))
+		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = w.Write([]byte(b.String()))
 	}
