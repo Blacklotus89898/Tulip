@@ -259,3 +259,33 @@ func TestBenchmarkAndMarks(t *testing.T) {
 		t.Errorf("one mark per book per day, got %d", len(marks))
 	}
 }
+
+func TestReviewIsAdviceOnly(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	s := h.proposeBuy(t, 10)
+	if err := h.d.AddReview(ctx, Review{SuggestionID: s.ID, Verdict: "resize", Qty: 5, Confidence: 0.7,
+		Rationale: "trend is young", By: "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, bad := range map[string]Review{
+		"bad verdict":     {SuggestionID: s.ID, Verdict: "approve", Confidence: 0.5, Rationale: "x"},
+		"no rationale":    {SuggestionID: s.ID, Verdict: "agree", Confidence: 0.5},
+		"resize no qty":   {SuggestionID: s.ID, Verdict: "resize", Confidence: 0.5, Rationale: "x"},
+		"confidence > 1":  {SuggestionID: s.ID, Verdict: "agree", Confidence: 2, Rationale: "x"},
+		"unknown pending": {SuggestionID: "sug_nope", Verdict: "agree", Confidence: 0.5, Rationale: "x"},
+	} {
+		if err := h.d.AddReview(ctx, bad); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	rs, _ := h.d.Reviews(ctx, s.ID)
+	if len(rs) != 1 || rs[0].Verdict != "resize" {
+		t.Errorf("reviews = %+v", rs)
+	}
+	// Advice only: still pending, same qty, nothing filled.
+	st, _ := h.d.LoadState(ctx)
+	if len(st.Pending) != 1 || st.Pending[0].Qty != 10 || st.Books["strategy"].Fills != 0 {
+		t.Errorf("a review must not change the suggestion: %+v", st.Pending)
+	}
+}

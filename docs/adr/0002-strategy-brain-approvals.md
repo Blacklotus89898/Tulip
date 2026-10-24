@@ -34,6 +34,12 @@ not a gate.
    call cap and a configurable model (default a cheaper one). Malformed JSON,
    schema miss, or API error → **no proposal** (fail closed). No API key →
    brain disabled, rules-only.
+   **Session mode (2026-10-24, the operator's choice):** no Anthropic API key
+   in the cluster — the reviewer is the operator's Claude Code chat, through
+   the MCP tool `review_suggestion` (verdict, confidence, rationale →
+   `claude.review` event, shown on the approval page). A Claude subscription
+   login is not an API key and is never moved into a service. The in-loop API
+   reviewer stays available behind the same seam if a key is added later.
 3. **Everything is journaled with its counterfactual:** the rule's candidate,
    Claude's verdict, the human decision, and the paper fill — so the journal can
    answer "does Claude add anything over the plain rules?" (ADR 0001's signal to

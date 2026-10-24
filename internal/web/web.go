@@ -61,6 +61,10 @@ small{color:#777}
   <p><span class="k">Why:</span> {{.Rationale}}</p>
   <p><span class="k">Expires:</span> {{local .Expires}} · <span class="k">ID</span> {{.ID}}</p>
 </div>
+{{range $.Reviews}}
+<div class="card"><span class="k">Claude's review:</span> <b>{{.Verdict}}</b>{{if .Qty}} → {{.Qty}} shares{{end}}
+ · confidence {{printf "%.2f" .Confidence}}<br>{{.Rationale}}<br><small>advice only — you decide</small></div>
+{{end}}
 {{if $.Pending}}
 <form method="post">
   <input type="hidden" name="hash" value="{{.Hash}}">
@@ -87,6 +91,7 @@ type view struct {
 	Title, Message string
 	Error, Pending bool
 	S              *desk.Suggestion
+	Reviews        []desk.Review
 	Kill, Armed    bool
 }
 
@@ -117,7 +122,8 @@ func (h *handler) page(w http.ResponseWriter, r *http.Request) {
 		render(w, http.StatusNotFound, view{Title: "not pending", Message: "This suggestion is no longer pending (approved, declined, expired or unknown).", Error: true})
 		return
 	}
-	render(w, http.StatusOK, view{Title: "approve?", S: s, Pending: true})
+	reviews, _ := h.d.Reviews(r.Context(), s.ID)
+	render(w, http.StatusOK, view{Title: "approve?", S: s, Pending: true, Reviews: reviews})
 }
 
 func (h *handler) submit(w http.ResponseWriter, r *http.Request) {

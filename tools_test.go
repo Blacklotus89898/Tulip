@@ -12,7 +12,7 @@ import (
 // contract; extending it is a deliberate, reviewed change.
 var allowedTools = map[string]bool{
 	"tulip_status": true, "journal_list": true, "portfolio": true, "suggestions_pending": true,
-	"propose": true, "decline": true, "kill_switch_arm": true, "cycle_run": true,
+	"propose": true, "review_suggestion": true, "decline": true, "kill_switch_arm": true, "cycle_run": true,
 }
 
 func TestMCPToolsAreAllowlisted(t *testing.T) {

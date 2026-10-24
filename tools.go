@@ -138,6 +138,32 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			},
 		},
 		{
+			Name: "review_suggestion",
+			Description: "Record your review of a pending suggestion: verdict agree|disagree|resize (with qty), confidence 0..1 " +
+				"and rationale. Advice only — it is shown to the operator on the approval page and journaled for " +
+				"measuring whether your reviews beat the plain rules. It never approves or changes the suggestion.",
+			InputSchema: obj(map[string]any{
+				"id": str, "verdict": map[string]any{"type": "string", "enum": []string{"agree", "disagree", "resize"}},
+				"qty":        map[string]any{"type": "integer", "minimum": 1},
+				"confidence": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "rationale": str,
+			}, "id", "verdict", "confidence", "rationale"),
+			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				var a struct {
+					ID, Verdict, Rationale string
+					Qty                    int     `json:"qty"`
+					Confidence             float64 `json:"confidence"`
+				}
+				if err := json.Unmarshal(args, &a); err != nil {
+					return "", fmt.Errorf("bad arguments: %w", err)
+				}
+				if err := d.AddReview(ctx, desk.Review{SuggestionID: a.ID, Verdict: a.Verdict, Qty: a.Qty,
+					Confidence: a.Confidence, Rationale: a.Rationale, By: "claude-code"}); err != nil {
+					return "", err
+				}
+				return "review recorded for " + a.ID + " — the operator sees it on the approval page", nil
+			},
+		},
+		{
 			Name:        "decline",
 			Description: "Decline a pending suggestion (reduces risk; no approval needed).",
 			InputSchema: obj(map[string]any{"id": str, "reason": str}, "id", "reason"),
