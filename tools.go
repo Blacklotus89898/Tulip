@@ -40,8 +40,12 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 				}
 				counts, _ := j.Counts(ctx)
 				open, calErr := calendar.IsOpen(d.Now0())
+				mode, approvalHow := "paper", "human-only (passphrase on the approval page)"
+				if d.CoPilot() {
+					mode, approvalHow = "copilot", "the operator places every order in Questrade; Tulip only reads the account"
+				}
 				out := map[string]any{
-					"version": version, "mode": "paper", "approval": "human-only (passphrase on the approval page)",
+					"version": version, "mode": mode, "approval": approvalHow,
 					"market_open": open, "kill_switch": st.KillSwitch, "kill_reason": st.KillReason,
 					"pending": len(st.Pending), "approvals_enabled": d.PassphraseHash != "",
 					"brain": lp.Brain != nil, "journal_events": counts,
@@ -89,8 +93,31 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			},
 		},
 		{
+			Name: "broker_account",
+			Description: "Co-pilot mode (ADR 0003): a fresh READ-ONLY snapshot of the one Questrade account (CAD cash, " +
+				"equity, whole-share holdings) and the strategy's attributed trades (suggestions the operator acted on, " +
+				"with slippage). Paper mode: says so. Never places or changes anything.",
+			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+				if !d.CoPilot() {
+					return pretty(map[string]any{"mode": "paper", "note": "no broker connected — see the portfolio tool"})
+				}
+				out := map[string]any{"mode": "copilot"}
+				if snap, err := d.Account.Snapshot(ctx); err != nil {
+					out["snapshot_error"] = err.Error()
+				} else {
+					out["snapshot"] = snap
+				}
+				attributed, err := d.Attributed(ctx)
+				if err != nil {
+					return "", err
+				}
+				out["attributed_trades"] = attributed
+				return pretty(out)
+			},
+		},
+		{
 			Name:        "suggestions_pending",
-			Description: "Suggestions waiting for the operator's approval (with their approval-page path).",
+			Description: "Suggestions waiting for the operator (paper: to approve; co-pilot: to place in Questrade), with their page path.",
 			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
 				st, err := d.LoadState(ctx)
 				if err != nil {

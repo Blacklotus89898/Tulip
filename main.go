@@ -1,6 +1,6 @@
-// Command tulip is a human-approved paper-trading agent: rules propose, Claude
-// reviews, Thorn disposes, the operator approves, the journal remembers
-// (ADR 0001, 0002).
+// Command tulip is a human-gated trading co-pilot: rules propose, Claude
+// reviews, Thorn disposes, the operator approves (paper) or places the order
+// themselves in Questrade (co-pilot), the journal remembers (ADR 0001–0003).
 //
 //	tulip [flags]                 run the service
 //	tulip hash-passphrase         read a passphrase on stdin, print its hash
@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/Blacklotus89898/Tulip/internal/marketdata"
 	"github.com/Blacklotus89898/Tulip/internal/mcp"
 	"github.com/Blacklotus89898/Tulip/internal/notify"
+	"github.com/Blacklotus89898/Tulip/internal/questrade"
 	"github.com/Blacklotus89898/Tulip/internal/strategy"
 	"github.com/Blacklotus89898/Tulip/internal/thorn"
 	"github.com/Blacklotus89898/Tulip/internal/web"
@@ -47,13 +49,13 @@ func main() {
 	}
 	addr := flag.String("addr", ":8080", "listen address (pages, MCP, API)")
 	dbPath := flag.String("db", "data/tulip.db", "journal database path")
-	mode := flag.String("mode", "paper", "broker mode: paper (the only v1 mode)")
+	mode := flag.String("mode", envOr("TULIP_MODE", "paper"), "paper | copilot (read-only Questrade, ADR 0003)")
 	symbols := flag.String("symbols", "XIU.TO,VFV.TO,XEF.TO,ZAG.TO", "symbols the rules scan (must be on Thorn's allowlist)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if *mode != "paper" {
-		logger.Error("only paper mode exists in v1 (ADR 0001 §8)", "mode", *mode)
+	if *mode != "paper" && *mode != "copilot" {
+		logger.Error("mode must be paper or copilot", "mode", *mode)
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -72,10 +74,27 @@ func main() {
 
 	md := &marketdata.Yahoo{}
 	passHash := os.Getenv("TULIP_APPROVAL_PASSPHRASE_HASH")
+	thornCfg := thorn.DefaultConfig()
+	envFloat(logger, "TULIP_THORN_MAX_ORDER_VALUE", &thornCfg.MaxOrderValue)
+	envFloat(logger, "TULIP_THORN_DAILY_LOSS_CAP", &thornCfg.DailyLossCap)
+	envFloat(logger, "TULIP_THORN_MAX_POSITION_WEIGHT", &thornCfg.MaxPositionWeight)
 	d := &desk.Desk{
 		J: j, MD: md, Broker: broker.Paper{SlippageBps: 10},
-		Cfg:            desk.Config{Thorn: thorn.DefaultConfig()},
+		Cfg:            desk.Config{Thorn: thornCfg},
 		PassphraseHash: passHash, Limiter: &approval.Limiter{},
+	}
+	var acct *questradeAccount
+	if *mode == "copilot" {
+		number := os.Getenv("TULIP_QUESTRADE_ACCOUNT")
+		if number == "" {
+			logger.Error("copilot mode needs TULIP_QUESTRADE_ACCOUNT (the one account Tulip reads)")
+			os.Exit(2)
+		}
+		// The sealed token only bootstraps; the rotated one lives next to the
+		// journal (ADR 0003 §6). Never logged.
+		qc := &questrade.Client{StateDir: filepath.Dir(*dbPath), Bootstrap: strings.TrimSpace(os.Getenv("QUESTRADE_REFRESH_TOKEN"))}
+		acct = newQuestradeAccount(qc, number, j)
+		d.Account = acct
 	}
 	pager := notify.Ntfy{
 		URL: os.Getenv("TULIP_NTFY_URL"), Topic: envOr("TULIP_NTFY_TOPIC", "tulip-approvals"),
@@ -98,10 +117,13 @@ func main() {
 	}
 	lp := &loop.Loop{Desk: d, MD: md, Strategy: strategy.Momentum{}, Symbols: splitList(*symbols), Log: logger}
 	_, _ = j.Append(ctx, "service.started", "", map[string]any{
-		"version": version, "mode": *mode, "symbols": lp.Symbols,
+		"version": version, "mode": *mode, "symbols": lp.Symbols, "thorn": thornCfg,
 		"approvals_enabled": passHash != "", "notify": pager.URL != "", "brain": lp.Brain != nil,
 	})
 	go lp.Run(ctx)
+	if acct != nil {
+		go reconcileLoop(ctx, d, acct, 3*time.Minute, logger)
+	}
 
 	token := os.Getenv("TULIP_API_TOKEN")
 	mux := http.NewServeMux()
@@ -109,7 +131,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","version":%q,"mode":%q}`+"\n", version, *mode)
 	})
-	mux.HandleFunc("GET /metrics", metricsHandler(j, d))
+	mux.HandleFunc("GET /metrics", metricsHandler(j, d, acct))
 	mux.Handle("POST /mcp", requireToken(token, mcp.New("tulip", version, tools(d, lp, j)...)))
 	web.Register(mux, d) // the operator's approval page (passphrase-gated)
 
@@ -149,6 +171,20 @@ func hashPassphrase() {
 	fmt.Println(h)
 }
 
+// envFloat overrides *dst from a positive number in env k.
+func envFloat(log *slog.Logger, k string, dst *float64) {
+	v := os.Getenv(k)
+	if v == "" {
+		return
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f <= 0 {
+		log.Error("ignoring invalid number", "env", k)
+		return
+	}
+	*dst = f
+}
+
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -184,7 +220,7 @@ func requireToken(token string, next http.Handler) http.Handler {
 	})
 }
 
-func metricsHandler(j *journal.Journal, d *desk.Desk) http.HandlerFunc {
+func metricsHandler(j *journal.Journal, d *desk.Desk, acct *questradeAccount) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		counts, err := j.Counts(r.Context())
 		if err != nil {
@@ -209,6 +245,9 @@ func metricsHandler(j *journal.Journal, d *desk.Desk) http.HandlerFunc {
 			}
 			fmt.Fprintf(&b, "# HELP tulip_kill_switch 1 while the kill switch is armed.\n# TYPE tulip_kill_switch gauge\ntulip_kill_switch %d\n", kill)
 			fmt.Fprintf(&b, "# HELP tulip_suggestions_pending Suggestions awaiting the operator.\n# TYPE tulip_suggestions_pending gauge\ntulip_suggestions_pending %d\n", len(st.Pending))
+		}
+		if acct != nil {
+			fmt.Fprintf(&b, "# HELP tulip_broker_auth_ok Questrade auth: 1 ok, 0 failing, -1 not tried yet.\n# TYPE tulip_broker_auth_ok gauge\ntulip_broker_auth_ok %d\n", acct.AuthGauge())
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = w.Write([]byte(b.String()))

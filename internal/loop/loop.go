@@ -95,12 +95,13 @@ func (l *Loop) Cycle(ctx context.Context, trigger string) (Result, error) {
 	}
 	_ = l.Desk.Mark(ctx)
 
-	st, err := l.Desk.LoadState(ctx)
+	// Sizing comes from the real account in co-pilot mode (ADR 0003): if it
+	// can't be read, propose nothing.
+	book, equity, err := l.Desk.SizingBook(ctx, cycle)
 	if err != nil {
-		return res, err
+		res.Unavailable = append(res.Unavailable, "account")
+		return res, nil
 	}
-	book := st.Books[portfolio.Strategy]
-	equity := book.Equity(nil)
 	for _, sym := range l.Symbols {
 		bars, err := l.MD.Daily(ctx, sym)
 		if err != nil {

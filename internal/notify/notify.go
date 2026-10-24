@@ -41,7 +41,7 @@ func (n Ntfy) Suggestion(ctx context.Context, s desk.Suggestion) error {
 	req.Header.Set("Tags", "tulip,chart_with_upwards_trend")
 	req.Header.Set("Priority", "4")
 	req.Header.Set("Click", link)
-	req.Header.Set("Actions", "view, Review & approve, "+link)
+	req.Header.Set("Actions", "view, Review, "+link)
 	cl := n.Client
 	if cl == nil {
 		cl = &http.Client{Timeout: 10 * time.Second}

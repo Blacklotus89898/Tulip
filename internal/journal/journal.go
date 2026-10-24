@@ -54,6 +54,12 @@ CREATE TABLE IF NOT EXISTS approvals_used (
 );
 CREATE TRIGGER IF NOT EXISTS approvals_no_delete BEFORE DELETE ON approvals_used
 BEGIN SELECT RAISE(ABORT, 'approvals are single-use and permanent'); END;
+-- Broker executions journaled exactly once (ADR 0003 §4): polling is
+-- repeated and overlapping; the primary key makes it idempotent.
+CREATE TABLE IF NOT EXISTS executions_seen (
+	execution_id TEXT PRIMARY KEY,
+	ts           TEXT NOT NULL
+);
 `
 
 // Open opens (creating if needed) the journal at path.
@@ -206,4 +212,15 @@ func (j *Journal) ByKinds(ctx context.Context, kinds ...string) ([]Event, error)
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ClaimExecution marks a broker execution as journaled; a repeat returns
+// ErrAlreadyUsed so reconciliation is idempotent.
+func (j *Journal) ClaimExecution(ctx context.Context, executionID string) error {
+	_, err := j.db.ExecContext(ctx, `INSERT INTO executions_seen (execution_id, ts) VALUES (?, ?)`,
+		executionID, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+		return ErrAlreadyUsed
+	}
+	return err
 }

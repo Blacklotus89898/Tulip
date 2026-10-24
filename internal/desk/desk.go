@@ -112,6 +112,7 @@ type Desk struct {
 	PassphraseHash string // TULIP_APPROVAL_PASSPHRASE_HASH; empty = approvals disabled
 	Limiter        *approval.Limiter
 	Notify         func(Suggestion) // set by the service (ntfy); may be nil
+	Account        AccountSource    // co-pilot mode (ADR 0003): the real account; nil = paper
 	Now            func() time.Time
 
 	mu sync.Mutex
@@ -146,6 +147,7 @@ var (
 type State struct {
 	Books       map[string]*portfolio.Book
 	Pending     []Suggestion
+	Expired     []Suggestion // expired without being acted on (co-pilot reconciliation)
 	KillSwitch  bool
 	KillReason  string
 	CreatedDays map[string]int // suggestions created per Toronto date
@@ -155,7 +157,7 @@ type State struct {
 func (d *Desk) LoadState(ctx context.Context) (*State, error) {
 	evs, err := d.J.ByKinds(ctx, portfolio.KindFunded, portfolio.KindFill,
 		KindSuggestionCreated, KindSuggestionDeclined, KindSuggestionExpired, KindOrderRejected,
-		KindKillArmed, KindKillDisarmed)
+		KindSuggestionActed, KindKillArmed, KindKillDisarmed)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +167,7 @@ func (d *Desk) LoadState(ctx context.Context) (*State, error) {
 	}
 	st := &State{Books: books, CreatedDays: map[string]int{}}
 	pending := map[string]Suggestion{}
+	expired := map[string]Suggestion{}
 	var order []string
 	for _, e := range evs {
 		switch e.Kind {
@@ -175,12 +178,18 @@ func (d *Desk) LoadState(ctx context.Context) (*State, error) {
 				order = append(order, s.ID)
 				st.CreatedDays[s.Created.In(calendar.Toronto).Format("2006-01-02")]++
 			}
-		case KindSuggestionDeclined, KindSuggestionExpired, KindOrderRejected:
+		case KindSuggestionDeclined, KindSuggestionExpired, KindOrderRejected, KindSuggestionActed:
 			var t struct {
 				ID string `json:"id"`
 			}
 			if json.Unmarshal(e.Payload, &t) == nil {
+				if s, ok := pending[t.ID]; ok && e.Kind == KindSuggestionExpired {
+					expired[t.ID] = s
+				}
 				delete(pending, t.ID)
+				if e.Kind == KindSuggestionActed {
+					delete(expired, t.ID)
+				}
 			}
 		case portfolio.KindFill:
 			var f portfolio.Fill
@@ -200,6 +209,9 @@ func (d *Desk) LoadState(ctx context.Context) (*State, error) {
 	for _, id := range order {
 		if s, ok := pending[id]; ok {
 			st.Pending = append(st.Pending, s)
+		}
+		if s, ok := expired[id]; ok {
+			st.Expired = append(st.Expired, s)
 		}
 	}
 	return st, nil
@@ -226,6 +238,9 @@ func (d *Desk) EnsureFunded(ctx context.Context) error {
 // dayPnL is today's change in the strategy book's equity since its first mark
 // of the day (0 if not marked yet today).
 func (d *Desk) dayPnL(ctx context.Context, equity float64) float64 {
+	if d.CoPilot() {
+		return d.brokerDayPnL(ctx, equity)
+	}
 	evs, err := d.J.ByKinds(ctx, KindMark)
 	if err != nil {
 		return 0
@@ -266,7 +281,10 @@ func (d *Desk) Propose(ctx context.Context, cycle string, r ProposeRequest) (*Su
 	if err != nil {
 		return nil, thorn.Verdict{}, err
 	}
-	book := st.Books[portfolio.Strategy]
+	book, equity, err := d.sizingBook(ctx, cycle, st)
+	if err != nil {
+		return nil, thorn.Verdict{}, err
+	}
 
 	ref, signalOn := 0.0, ""
 	if r.Candidate != nil {
@@ -279,7 +297,6 @@ func (d *Desk) Propose(ctx context.Context, cycle string, r ProposeRequest) (*Su
 		}
 		ref = q.Price
 	}
-	equity := book.Equity(d.quotes(ctx, book))
 	now := d.now()
 	verdict := thorn.Check(cfg.Thorn, thorn.Request{
 		Stage: thorn.Propose, Symbol: r.Symbol, Side: r.Side, Qty: r.Qty, Price: ref,
@@ -294,8 +311,13 @@ func (d *Desk) Propose(ctx context.Context, cycle string, r ProposeRequest) (*Su
 		return nil, verdict, err
 	}
 
+	expires := now.Add(cfg.TTL)
+	if d.CoPilot() {
+		// The operator places it by hand: it stays open until the session closes.
+		expires = sessionClose(now, cfg.TTL)
+	}
 	s := Suggestion{
-		ID: newID("sug"), Created: now.UTC(), Expires: now.Add(cfg.TTL).UTC(),
+		ID: newID("sug"), Created: now.UTC(), Expires: expires.UTC(),
 		Symbol: r.Symbol, Side: r.Side, Qty: r.Qty, RefPrice: ref, BandPct: cfg.BandPct,
 		SignalOn: signalOn, Source: r.Source, Rationale: r.Rationale, Confidence: r.Confidence, Candidate: r.Candidate,
 	}
@@ -419,6 +441,9 @@ func (d *Desk) checkPassphrase(ctx context.Context, id, passphrase string, who A
 // order executes immediately (subject to the execution checks) and the fill
 // is returned. This is the only path to broker.Fill for the strategy book.
 func (d *Desk) Approve(ctx context.Context, id, displayedHash, passphrase string, who Approver) (*portfolio.Fill, error) {
+	if d.CoPilot() {
+		return nil, ErrCoPilot // Tulip never fills against a real account
+	}
 	if err := d.checkPassphrase(ctx, id, passphrase, who); err != nil {
 		return nil, err
 	}

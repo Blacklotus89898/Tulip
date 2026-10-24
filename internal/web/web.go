@@ -65,7 +65,12 @@ small{color:#777}
 <div class="card"><span class="k">Claude's review:</span> <b>{{.Verdict}}</b>{{if .Qty}} → {{.Qty}} shares{{end}}
  · confidence {{printf "%.2f" .Confidence}}<br>{{.Rationale}}<br><small>advice only — you decide</small></div>
 {{end}}
-{{if $.Pending}}
+{{if and $.Pending $.CoPilot}}
+<div class="msg ok"><b>Co-pilot mode:</b> if you agree, place this order yourself in Questrade
+({{.Side}} {{.Qty}} {{.Symbol}}, limit near {{printf "%.2f" .RefPrice}}) before the close.
+Tulip reconciles the execution automatically. Nothing is approved here.</div>
+<form method="post"><button class="decline" name="action" value="decline">Decline (I won't place it)</button></form>
+{{else if $.Pending}}
 <form method="post">
   <input type="hidden" name="hash" value="{{.Hash}}">
   <p><label>Passphrase (approving only)<br><input type="password" name="passphrase" autocomplete="current-password"></label></p>
@@ -93,6 +98,7 @@ type view struct {
 	S              *desk.Suggestion
 	Reviews        []desk.Review
 	Kill, Armed    bool
+	CoPilot        bool
 }
 
 func (h *handler) find(ctx context.Context, id string) (*desk.Suggestion, bool) {
@@ -123,7 +129,11 @@ func (h *handler) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reviews, _ := h.d.Reviews(r.Context(), s.ID)
-	render(w, http.StatusOK, view{Title: "approve?", S: s, Pending: true, Reviews: reviews})
+	title := "approve?"
+	if h.d.CoPilot() {
+		title = "place it?"
+	}
+	render(w, http.StatusOK, view{Title: title, S: s, Pending: true, Reviews: reviews, CoPilot: h.d.CoPilot()})
 }
 
 func (h *handler) submit(w http.ResponseWriter, r *http.Request) {
