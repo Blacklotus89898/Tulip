@@ -26,6 +26,8 @@ type questradeAccount struct {
 
 	authOK   atomic.Int32 // 1 ok, 0 failing, -1 not tried yet
 	lastOK   atomic.Int64 // unix seconds of the last successful call
+	lastErr  atomic.Int64 // unix seconds of the last journaled broker.error
+	log      *slog.Logger
 	mu       sync.Mutex
 	verified bool
 }
@@ -48,6 +50,16 @@ func (a *questradeAccount) note(ctx context.Context, err error) {
 	case authErr:
 		if a.authOK.Swap(0) != 0 {
 			_, _ = a.j.Append(ctx, "broker.auth_failed", "", map[string]string{"broker": "questrade", "error": err.Error()})
+		}
+	default:
+		// Not auth: network, HTTP 5xx, bad response. Errors are already
+		// scrubbed of token material. Journaled at most every 30 min.
+		if a.log != nil {
+			a.log.Warn("questrade call failed", "err", err)
+		}
+		if now := time.Now().Unix(); now-a.lastErr.Load() > 1800 {
+			a.lastErr.Store(now)
+			_, _ = a.j.Append(ctx, "broker.error", "", map[string]string{"broker": "questrade", "error": err.Error()})
 		}
 	}
 }

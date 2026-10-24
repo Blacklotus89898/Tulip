@@ -94,6 +94,7 @@ func main() {
 		// journal (ADR 0003 §6). Never logged.
 		qc := &questrade.Client{StateDir: filepath.Dir(*dbPath), Bootstrap: strings.TrimSpace(os.Getenv("QUESTRADE_REFRESH_TOKEN"))}
 		acct = newQuestradeAccount(qc, number, j)
+		acct.log = logger
 		d.Account = acct
 	}
 	pager := notify.Ntfy{
