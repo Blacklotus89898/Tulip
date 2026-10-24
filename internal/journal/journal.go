@@ -9,7 +9,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -44,6 +46,14 @@ CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'journal is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'journal is append-only'); END;
+-- Single-use approvals (ADR 0002 §3): the PRIMARY KEY is the guarantee —
+-- two concurrent approvals of one suggestion cannot both insert.
+CREATE TABLE IF NOT EXISTS approvals_used (
+	suggestion_id TEXT PRIMARY KEY,
+	ts            TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS approvals_no_delete BEFORE DELETE ON approvals_used
+BEGIN SELECT RAISE(ABORT, 'approvals are single-use and permanent'); END;
 `
 
 // Open opens (creating if needed) the journal at path.
@@ -150,6 +160,50 @@ func (j *Journal) Counts(ctx context.Context) (map[string]int64, error) {
 			return nil, err
 		}
 		out[k] = n
+	}
+	return out, rows.Err()
+}
+
+// ErrAlreadyUsed: this suggestion's approval was already consumed.
+var ErrAlreadyUsed = errors.New("approval already used")
+
+// ClaimApproval consumes a suggestion's one approval. The second caller —
+// concurrent or later — gets ErrAlreadyUsed (unique constraint), never a
+// second execution.
+func (j *Journal) ClaimApproval(ctx context.Context, suggestionID string) error {
+	_, err := j.db.ExecContext(ctx, `INSERT INTO approvals_used (suggestion_id, ts) VALUES (?, ?)`,
+		suggestionID, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+		return ErrAlreadyUsed
+	}
+	return err
+}
+
+// ByKinds returns every event of the given kinds, oldest first — for
+// replaying derived state (books, suggestions, kill switch).
+func (j *Journal) ByKinds(ctx context.Context, kinds ...string) ([]Event, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	q := `SELECT id, ts, kind, cycle, payload FROM events WHERE kind IN (?` + strings.Repeat(",?", len(kinds)-1) + `) ORDER BY id ASC`
+	args := make([]any, len(kinds))
+	for i, k := range kinds {
+		args[i] = k
+	}
+	rows, err := j.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var payload string
+		if err := rows.Scan(&e.ID, &e.TS, &e.Kind, &e.Cycle, &payload); err != nil {
+			return nil, err
+		}
+		e.Payload = json.RawMessage(payload)
+		out = append(out, e)
 	}
 	return out, rows.Err()
 }

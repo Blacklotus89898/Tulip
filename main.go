@@ -1,13 +1,16 @@
-// Command tulip is a human-approved trading agent: Claude proposes, Thorn
-// disposes, the journal remembers (ADR 0001, 0002). This is the walking
-// skeleton: journal, health, metrics and the read-only MCP supervision surface
-// — deployed through the Homelab golden path before any trading logic lands.
+// Command tulip is a human-approved paper-trading agent: rules propose, Claude
+// reviews, Thorn disposes, the operator approves, the journal remembers
+// (ADR 0001, 0002).
+//
+//	tulip [flags]                 run the service
+//	tulip hash-passphrase         read a passphrase on stdin, print its hash
+//	                              (for TULIP_APPROVAL_PASSPHRASE_HASH)
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,17 +24,31 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Blacklotus89898/Tulip/internal/approval"
+	"github.com/Blacklotus89898/Tulip/internal/broker"
+	"github.com/Blacklotus89898/Tulip/internal/desk"
 	"github.com/Blacklotus89898/Tulip/internal/journal"
+	"github.com/Blacklotus89898/Tulip/internal/loop"
+	"github.com/Blacklotus89898/Tulip/internal/marketdata"
 	"github.com/Blacklotus89898/Tulip/internal/mcp"
+	"github.com/Blacklotus89898/Tulip/internal/notify"
+	"github.com/Blacklotus89898/Tulip/internal/strategy"
+	"github.com/Blacklotus89898/Tulip/internal/thorn"
+	"github.com/Blacklotus89898/Tulip/internal/web"
 )
 
 // version is stamped at build time (-ldflags "-X main.version=<sha>").
 var version = "dev"
 
 func main() {
-	addr := flag.String("addr", ":8080", "listen address (MCP + API)")
+	if len(os.Args) > 1 && os.Args[1] == "hash-passphrase" {
+		hashPassphrase()
+		return
+	}
+	addr := flag.String("addr", ":8080", "listen address (pages, MCP, API)")
 	dbPath := flag.String("db", "data/tulip.db", "journal database path")
 	mode := flag.String("mode", "paper", "broker mode: paper (the only v1 mode)")
+	symbols := flag.String("symbols", "XIU.TO,VFV.TO,XEF.TO,ZAG.TO", "symbols the rules scan (must be on Thorn's allowlist)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -52,21 +69,55 @@ func main() {
 		os.Exit(1)
 	}
 	defer j.Close()
-	_, _ = j.Append(ctx, "service.started", "", map[string]string{"version": version, "mode": *mode})
+
+	md := &marketdata.Yahoo{}
+	passHash := os.Getenv("TULIP_APPROVAL_PASSPHRASE_HASH")
+	d := &desk.Desk{
+		J: j, MD: md, Broker: broker.Paper{SlippageBps: 10},
+		Cfg:            desk.Config{Thorn: thorn.DefaultConfig()},
+		PassphraseHash: passHash, Limiter: &approval.Limiter{},
+	}
+	pager := notify.Ntfy{
+		URL: os.Getenv("TULIP_NTFY_URL"), Topic: envOr("TULIP_NTFY_TOPIC", "tulip-approvals"),
+		PublicURL: envOr("TULIP_PUBLIC_URL", "http://192.168.0.108:30995"),
+	}
+	d.Notify = func(s desk.Suggestion) {
+		go func() { // never block the desk on the network
+			nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := pager.Suggestion(nctx, s); err != nil {
+				_, _ = j.Append(nctx, "notify.error", "", map[string]string{"id": s.ID, "error": err.Error()})
+				return
+			}
+			_, _ = j.Append(nctx, "suggestion.notified", "", map[string]string{"id": s.ID, "topic": pager.Topic})
+		}()
+	}
+	if err := d.EnsureFunded(ctx); err != nil {
+		logger.Error("fund books", "err", err)
+		os.Exit(1)
+	}
+	lp := &loop.Loop{Desk: d, MD: md, Strategy: strategy.Momentum{}, Symbols: splitList(*symbols), Log: logger}
+	_, _ = j.Append(ctx, "service.started", "", map[string]any{
+		"version": version, "mode": *mode, "symbols": lp.Symbols,
+		"approvals_enabled": passHash != "", "notify": pager.URL != "", "brain": lp.Brain != nil,
+	})
+	go lp.Run(ctx)
 
 	token := os.Getenv("TULIP_API_TOKEN")
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]string{"status": "ok", "version": version, "mode": *mode})
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"status":"ok","version":%q,"mode":%q}`+"\n", version, *mode)
 	})
 	mux.HandleFunc("GET /metrics", metricsHandler(j))
-	mux.Handle("POST /mcp", requireToken(token, mcp.New("tulip", version, tools(j, *mode)...)))
+	mux.Handle("POST /mcp", requireToken(token, mcp.New("tulip", version, tools(d, lp, j)...)))
+	web.Register(mux, d) // the operator's approval page (passphrase-gated)
 
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	logger.Info("tulip listening", "addr", *addr, "db", *dbPath, "mode", *mode, "version", version,
-		"mcp", token != "", "approval", "human-only (no MCP approve tool)")
+		"mcp", token != "", "approvals", passHash != "", "notify", pager.URL != "")
 
 	select {
 	case <-ctx.Done():
@@ -79,6 +130,40 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+}
+
+// hashPassphrase reads one line from stdin and prints its PBKDF2 hash. Run it
+// on your own machine; only the hash goes into the cluster.
+func hashPassphrase() {
+	fmt.Fprintln(os.Stderr, "Passphrase (12+ chars), then Enter:")
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(os.Stderr, "no input")
+		os.Exit(1)
+	}
+	h, err := approval.HashPassphrase(strings.TrimRight(line, "\r\n"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Println(h)
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // requireToken guards a handler with a bearer token; no token configured →
@@ -97,58 +182,6 @@ func requireToken(token string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// tools are the skeleton's read-only MCP tools. Propose / decline / kill switch
-// arrive with the loop; an approve tool never does (ADR 0002 §3).
-func tools(j *journal.Journal, mode string) []mcp.Tool {
-	return []mcp.Tool{
-		{
-			Name:        "tulip_status",
-			Description: "Tulip's mode, version and journal event counts by kind.",
-			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
-				counts, err := j.Counts(ctx)
-				if err != nil {
-					return "", err
-				}
-				b, _ := json.MarshalIndent(map[string]any{
-					"version": version, "mode": mode, "approval": "human-only",
-					"journal_events": counts,
-				}, "", "  ")
-				return string(b), nil
-			},
-		},
-		{
-			Name:        "journal_list",
-			Description: "Read journal events, newest first. Optional filters: kind, cycle; limit (default 50, max 500); after_id to tail oldest-first.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"kind":     map[string]any{"type": "string"},
-					"cycle":    map[string]any{"type": "string"},
-					"limit":    map[string]any{"type": "integer"},
-					"after_id": map[string]any{"type": "integer"},
-				},
-			},
-			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
-				var a struct {
-					Kind    string `json:"kind"`
-					Cycle   string `json:"cycle"`
-					Limit   int    `json:"limit"`
-					AfterID int64  `json:"after_id"`
-				}
-				if err := json.Unmarshal(args, &a); err != nil {
-					return "", fmt.Errorf("bad arguments: %w", err)
-				}
-				evs, err := j.List(ctx, journal.Query{Kind: a.Kind, Cycle: a.Cycle, Limit: a.Limit, AfterID: a.AfterID})
-				if err != nil {
-					return "", err
-				}
-				b, _ := json.MarshalIndent(evs, "", "  ")
-				return string(b), nil
-			},
-		},
-	}
 }
 
 func metricsHandler(j *journal.Journal) http.HandlerFunc {
@@ -172,9 +205,4 @@ func metricsHandler(j *journal.Journal) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = w.Write([]byte(b.String()))
 	}
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
 }

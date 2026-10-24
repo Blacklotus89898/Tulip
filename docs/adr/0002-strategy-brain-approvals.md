@@ -63,10 +63,26 @@ not a gate.
 - **It cannot approve.** There is no approve tool on the MCP surface. If the
   credential Claude holds could approve, Claude could approve its own
   proposals — the human gate would not exist.
-- **Approval is a human-channel action:** a single-use approval token minted
-  per suggestion, HMAC-bound to the exact proposal (symbol, side, qty, limit
-  price band) with a 15-minute TTL and an idempotency key — a double tap or a
-  replay can't fill twice. Delivered to the operator (ntfy in v1).
+- **Approval is a human-channel action, gated by a passphrase only the
+  operator knows** (implemented 2026-10-24, replacing the single-use HMAC link
+  first sketched here). The operator generates it on their own machine
+  (`tulip hash-passphrase`) and the cluster stores only its PBKDF2-SHA256 hash
+  (600k iterations, `TULIP_APPROVAL_PASSPHRASE_HASH`). Reading the secret does
+  not grant approval; wrong attempts are rate-limited and journaled.
+- **ntfy messages carry no credential:** only the terms and a link to the
+  approval page. The page shows the exact terms; the form posts back a
+  proposal hash (symbol, side, qty, ref price, band, expiry), so an approval
+  binds to what was displayed. **Single-use is enforced by the database**
+  (`approvals_used` primary key — concurrent approvals can't both win). The
+  approver's IP and User-Agent are journaled. Declining needs no passphrase
+  (it only reduces risk); disarming the kill switch does.
+- **What v1's gate holds against, stated plainly:** the in-loop brain and the
+  MCP token cannot approve. An agent session with cluster-admin (Claude Code
+  in the Homelab repo) can read secrets — it still cannot approve without the
+  passphrase, but nothing *cryptographically* stops it from trying; the rule
+  that it never reads `tulip-approval-*` secrets, never calls `/approve` or
+  `/killswitch`, and never approves on the operator's behalf is **policy**,
+  written into Homelab `CLAUDE.md`.
 - **"Claude performs the transaction" is satisfied by the server, not the
   prompt:** once a valid human approval exists, Tulip executes it through the
   broker interface (Claude Code can also *trigger* execution of an
@@ -78,10 +94,17 @@ not a gate.
 ### 4. v3 gate (live money) — written now so it can't be forgotten
 The v1 ntfy channel is unauthenticated on the LAN: anything in a message
 (including an approval link) is readable by any LAN client. Acceptable for
-**paper**. Before any live broker (v3): an authenticated approval channel
-(ntfy access control with a phone subscriber token, or an approval page behind
-a PIN/password), the lab CA trusted on the phone, and the Homelab
-sealed-secrets keyring re-exported after each rotation.
+**paper**. Before any live broker (v3):
+- **asymmetric approval** — a WebAuthn passkey (or Ed25519 key) whose private
+  half lives only on the operator's device, the cluster holding only the
+  public key, so no cluster-side secret (and no agent with cluster-admin) can
+  approve;
+- an authenticated notification channel (ntfy access control + a phone
+  subscriber token);
+- TLS to the approval page from the phone (lab CA trusted there) — v1 serves
+  it on the LAN NodePort over plain HTTP, so the passphrase crosses the LAN
+  unencrypted;
+- the Homelab sealed-secrets keyring re-exported after each rotation.
 
 ## Consequences
 
