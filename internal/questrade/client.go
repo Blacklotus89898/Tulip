@@ -139,6 +139,23 @@ func scrub(err error) error {
 	return err
 }
 
+// apiError extracts only Questrade's documented {"code","message"} from an
+// error body — never the raw body, which could echo request material.
+func apiError(r io.Reader) string {
+	var e struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if json.NewDecoder(io.LimitReader(r, 4096)).Decode(&e) != nil || (e.Code == 0 && e.Message == "") {
+		return ""
+	}
+	msg := e.Message
+	if len(msg) > 120 {
+		msg = msg[:120]
+	}
+	return fmt.Sprintf(" (code %d: %s)", e.Code, msg)
+}
+
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
@@ -180,7 +197,7 @@ func (c *Client) ensure(ctx context.Context, force bool) (string, string, error)
 		return "", "", ErrAuth
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("questrade: token refresh HTTP %d", resp.StatusCode)
+		return "", "", fmt.Errorf("questrade: token refresh HTTP %d%s", resp.StatusCode, apiError(resp.Body))
 	}
 	var tr tokenResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&tr); err != nil {
@@ -231,7 +248,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 			continue // access token expired early: refresh once
 		}
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("questrade: %s: HTTP %d", strings.SplitN(path, "?", 2)[0], resp.StatusCode)
+			return fmt.Errorf("questrade: %s: HTTP %d%s", strings.SplitN(path, "?", 2)[0], resp.StatusCode, apiError(strings.NewReader(string(body))))
 		}
 		if err := json.Unmarshal(body, out); err != nil {
 			return fmt.Errorf("questrade: %s: unreadable response", strings.SplitN(path, "?", 2)[0])
