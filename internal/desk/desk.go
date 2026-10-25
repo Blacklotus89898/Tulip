@@ -271,9 +271,19 @@ func (d *Desk) quotes(ctx context.Context, b *portfolio.Book) map[string]float64
 
 // ---- propose ----
 
+// MinRationale is the shortest justification a suggestion may carry: every
+// suggestion, from any source, must say why (operator requirement 2026-10-25).
+const MinRationale = 20
+
+// ErrNoJustification rejects a proposal without a real rationale.
+var ErrNoJustification = errors.New("a suggestion needs a justification (rationale of at least 20 characters)")
+
 // Propose runs Thorn and, if it passes, creates a pending suggestion and
 // notifies the operator. Thorn rejections are journaled too.
 func (d *Desk) Propose(ctx context.Context, cycle string, r ProposeRequest) (*Suggestion, thorn.Verdict, error) {
+	if len(strings.TrimSpace(r.Rationale)) < MinRationale {
+		return nil, thorn.Verdict{}, ErrNoJustification
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	cfg := d.cfg()

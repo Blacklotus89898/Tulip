@@ -49,7 +49,7 @@ h1{font-size:1.3rem} .card{border:1px solid #ddd;border-radius:10px;padding:1rem
 .ok{background:#e8f6ec} .err{background:#fdecec} input[type=password]{width:100%;padding:.6rem;font-size:1rem;box-sizing:border-box}
 button{padding:.7rem 1.2rem;font-size:1rem;border-radius:8px;border:0;margin-right:.5rem}
 .approve{background:#1f7a3f;color:#fff} .decline{background:#eee}
-small{color:#777}
+small{color:#777} .why{white-space:pre-line;line-height:1.45}
 </style></head><body>
 <h1>🌷 Tulip — {{.Title}}</h1>
 {{if .Message}}<div class="msg {{if .Error}}err{{else}}ok{{end}}">{{.Message}}</div>{{end}}
@@ -58,7 +58,8 @@ small{color:#777}
   <div class="big">{{.Side}} {{.Qty}} {{.Symbol}}</div>
   <div>at ~{{printf "%.2f" .RefPrice}} (must stay within {{pct .BandPct}}% at execution)</div>
   <p><span class="k">Source:</span> {{.Source}}{{with .Confidence}} · confidence {{printf "%.2f" .}}{{end}}</p>
-  <p><span class="k">Why:</span> {{.Rationale}}</p>
+  <p><span class="k">Justification:</span></p>
+  <p class="why">{{.Rationale}}</p>
   <p><span class="k">Expires:</span> {{local .Expires}} · <span class="k">ID</span> {{.ID}}</p>
 </div>
 {{range $.Reviews}}

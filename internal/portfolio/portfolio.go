@@ -62,6 +62,12 @@ type Book struct {
 // Replay builds the named books from journal events (any order — they are
 // sorted by id). Unknown event kinds are ignored.
 func Replay(events []journal.Event, books ...string) (map[string]*Book, error) {
+	return ReplayKinds(events, KindFunded, KindFill, books...)
+}
+
+// ReplayKinds is Replay over other event kinds — the shadow books (ADR 0004)
+// keep their own funded/fill kinds so they can never touch the real ledger.
+func ReplayKinds(events []journal.Event, fundedKind, fillKind string, books ...string) (map[string]*Book, error) {
 	sorted := append([]journal.Event(nil), events...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 	out := map[string]*Book{}
@@ -70,7 +76,7 @@ func Replay(events []journal.Event, books ...string) (map[string]*Book, error) {
 	}
 	for _, e := range sorted {
 		switch e.Kind {
-		case KindFunded:
+		case fundedKind:
 			var f Funded
 			if err := json.Unmarshal(e.Payload, &f); err != nil {
 				return nil, fmt.Errorf("event %d: %w", e.ID, err)
@@ -78,7 +84,7 @@ func Replay(events []journal.Event, books ...string) (map[string]*Book, error) {
 			if b, ok := out[f.Book]; ok && !b.Funded {
 				b.Funded, b.Cash = true, f.Cash
 			}
-		case KindFill:
+		case fillKind:
 			var f Fill
 			if err := json.Unmarshal(e.Payload, &f); err != nil {
 				return nil, fmt.Errorf("event %d: %w", e.ID, err)
@@ -94,6 +100,9 @@ func Replay(events []journal.Event, books ...string) (map[string]*Book, error) {
 	}
 	return out, nil
 }
+
+// Apply adds one fill to the book (Replay's step, exported for shadow books).
+func (b *Book) Apply(f Fill) error { return b.apply(f) }
 
 func (b *Book) apply(f Fill) error {
 	p := b.Positions[f.Symbol]

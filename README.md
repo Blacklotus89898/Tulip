@@ -75,6 +75,26 @@ Full reasoning in [ADR 0001](docs/adr/0001-architecture.md).
   **An agent must never read the approval secret, call `/approve` or
   `/killswitch`, or approve on the operator's behalf** (ADR 0002 §3).
 
+## Justifications, shadow books, scorecard (ADR 0004)
+
+- **Every suggestion carries a justification**; `Desk.Propose` refuses one
+  without (all sources: rules, brain, Claude Code). Rebalance suggestions
+  give:
+  - the rule with its numbers (e.g. "XEF.TO closed at 50.44, 1.0% above its
+    200-day average");
+  - what the order does to the book, and the signal date;
+  - for a sell, the estimated realized gain or loss (cash account).
+
+  The review page shows it all; the push shows the first line.
+- **Shadow books:** every pre-registered candidate (`strategy.Candidates`:
+  trend-filter-200, equal-weight, trend-ensemble, dual-momentum-12m,
+  inverse-vol-60) trades an unapproved 10k paper book on the live schedule,
+  in `shadow.*` journal kinds only. `TULIP_SHADOW=off` disables them.
+- **`scorecard` (MCP, read-only):** every book from a common start: return,
+  max drawdown, trades, sells, fees, realized P&L, plus what each candidate
+  would hold today and why. The promotion rule (12 months + backtest gate,
+  operator decides) is in ADR 0004.
+
 ## Co-pilot mode (Questrade, real account — ADR 0003)
 
 Questrade's API is **read-only for retail clients**, so Tulip never trades:

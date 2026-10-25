@@ -161,12 +161,7 @@ func runCompare(bars map[string][]marketdata.Candle, syms []string, base backtes
 	fmt.Printf("universe: risk %v · safe %s\n", risk, safe)
 	relaxed := base.Thorn
 	relaxed.MaxOrderValue, relaxed.MaxPositionWeight = 1e12, 1
-	allocs := []strategy.Allocator{
-		strategy.EqualWeight{Symbols: syms},
-		strategy.TrendFilter{Risk: risk, Safe: safe},
-		strategy.DualMomentum{Risk: risk, Safe: safe},
-		strategy.InverseVol{Symbols: syms},
-	}
+	allocs := strategy.Candidates(syms) // the pre-registered set (ADR 0004)
 	for _, com := range commissions {
 		fmt.Printf("\n=== commission %.2f per order · slippage %.0f bps · dividend-adjusted · fills next open ===\n", com, base.SlippageBps)
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.AlignRight)

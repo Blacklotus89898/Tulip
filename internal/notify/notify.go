@@ -30,8 +30,8 @@ func (n Ntfy) Suggestion(ctx context.Context, s desk.Suggestion) error {
 		return nil
 	}
 	link := strings.TrimRight(n.PublicURL, "/") + "/approve/" + s.ID
-	body := fmt.Sprintf("%s %d %s at ~%.2f (%s)\n%s\nExpires %s.",
-		strings.ToUpper(s.Side), s.Qty, s.Symbol, s.RefPrice, s.Source, s.Rationale,
+	body := fmt.Sprintf("%s %d %s at ~%.2f (%s)\n%s\nFull justification on the review page. Expires %s.",
+		strings.ToUpper(s.Side), s.Qty, s.Symbol, s.RefPrice, s.Source, Summary(s.Rationale),
 		s.Expires.In(calendar.Toronto).Format("15:04 MST"))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(n.URL, "/")+"/"+n.Topic, strings.NewReader(body))
 	if err != nil {
@@ -55,4 +55,22 @@ func (n Ntfy) Suggestion(ctx context.Context, s desk.Suggestion) error {
 		return fmt.Errorf("ntfy: HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// maxSummary bounds the justification in the push: ntfy turns long bodies
+// into attachments, which this server rejects (Homelab decision 2026-10-14).
+const maxSummary = 280
+
+// Summary is the push-sized part of a justification: its first line (the
+// "Why"), cut at a word boundary. The review page shows all of it.
+func Summary(rationale string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(rationale), "\n")
+	if r := []rune(line); len(r) > maxSummary {
+		cut := string(r[:maxSummary])
+		if i := strings.LastIndex(cut, " "); i > maxSummary/2 {
+			cut = cut[:i]
+		}
+		line = cut + "…"
+	}
+	return line
 }

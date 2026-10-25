@@ -39,7 +39,7 @@ func kinds(t *testing.T, h *harness, kind string) []json.RawMessage {
 
 func TestCoPilotFailsClosedWithoutTheAccount(t *testing.T) {
 	h := copilotHarness(t, &fakeAccount{err: errors.New("questrade: authentication failed")})
-	s, _, err := h.d.Propose(context.Background(), "c1", ProposeRequest{Symbol: "XIU.TO", Side: "buy", Qty: 1, Source: "rules"})
+	s, _, err := h.d.Propose(context.Background(), "c1", ProposeRequest{Rationale: testWhy, Symbol: "XIU.TO", Side: "buy", Qty: 1, Source: "rules"})
 	if err == nil || s != nil {
 		t.Fatalf("no account snapshot must mean no suggestion, got (%v, %v)", s, err)
 	}
@@ -56,7 +56,7 @@ func TestCoPilotSizesFromTheAccountAndNeverFills(t *testing.T) {
 	h := copilotHarness(t, &fakeAccount{snap: &Snapshot{Cash: 100, Equity: 100, Held: map[string]int{}}})
 	// 10 × 50 = 500 > the real account's 100 cash: Thorn must refuse, even
 	// though the paper book has plenty.
-	if s, v, err := h.d.Propose(ctx, "c1", ProposeRequest{Symbol: "XIU.TO", Side: "buy", Qty: 10, Source: "rules"}); err != nil || s != nil {
+	if s, v, err := h.d.Propose(ctx, "c1", ProposeRequest{Rationale: testWhy, Symbol: "XIU.TO", Side: "buy", Qty: 10, Source: "rules"}); err != nil || s != nil {
 		t.Fatalf("an order beyond the real cash must be rejected, got (%v, %+v, %v)", s, v, err)
 	}
 
@@ -139,7 +139,7 @@ func TestCoPilotDailyLossCapUsesTheRealAccount(t *testing.T) {
 	h := copilotHarness(t, acct)
 	h.proposeBuy(t, 1)                                                      // marks the day's base equity at 5000
 	acct.snap = &Snapshot{Cash: 4000, Equity: 4000, Held: map[string]int{}} // down 1000 > the 250 cap
-	if s, _, err := h.d.Propose(ctx, "c2", ProposeRequest{Symbol: "XIU.TO", Side: "buy", Qty: 1, Source: "rules"}); err != nil || s != nil {
+	if s, _, err := h.d.Propose(ctx, "c2", ProposeRequest{Rationale: testWhy, Symbol: "XIU.TO", Side: "buy", Qty: 1, Source: "rules"}); err != nil || s != nil {
 		t.Fatalf("a real-account loss past the cap must block buys, got (%v, %v)", s, err)
 	}
 	if n := len(kinds(t, h, KindBrokerMark)); n != 1 {

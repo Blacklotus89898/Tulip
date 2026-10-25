@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/Blacklotus89898/Tulip/internal/desk"
 	"github.com/Blacklotus89898/Tulip/internal/journal"
 	"github.com/Blacklotus89898/Tulip/internal/marketdata"
+	"github.com/Blacklotus89898/Tulip/internal/portfolio"
+	"github.com/Blacklotus89898/Tulip/internal/shadow"
 	"github.com/Blacklotus89898/Tulip/internal/strategy"
 	"github.com/Blacklotus89898/Tulip/internal/thorn"
 )
@@ -46,7 +49,7 @@ func (h fakeHist) HistorySince(_ context.Context, s string, _ time.Time) ([]mark
 	}
 	for i := range out {
 		x := float64(i)
-		px := map[string]float64{"XIU.TO": 30 + 0.05*x, "VFV.TO": 80 + 0.1*x, "XEF.TO": 45 - 0.05*x, "ZAG.TO": 15}[s]
+		px := map[string]float64{"XIU.TO": 30 + 0.05*x, "VFV.TO": 80 + 0.1*x, "XEF.TO": 45 - 0.05*x, "ZAG.TO": 15 + 0.01*float64(i%3)}[s] // ZAG nearly flat (not zero-vol: inverse-vol needs some)
 		out[i].Open, out[i].High, out[i].Low, out[i].Close = px, px, px, px
 	}
 	// A crash on the 1st of the month: completed only "today" — must not count.
@@ -112,6 +115,21 @@ func TestMonthlyRebalanceProposesApprovesAndCloses(t *testing.T) {
 	if p["VFV.TO"].Qty != 30 || p["XIU.TO"].Qty != 74 || p["ZAG.TO"].Qty != 222 {
 		t.Errorf("sizes = VFV %d XIU %d ZAG %d", p["VFV.TO"].Qty, p["XIU.TO"].Qty, p["ZAG.TO"].Qty)
 	}
+	// Every suggestion carries its justification: the rule with its numbers,
+	// what the order does, and the signal date.
+	for sym, s := range p {
+		for _, want := range []string{"Why: ", "Order: Buy ", "Rule: trend-filter-200 monthly rebalance for 2026-11"} {
+			if !strings.Contains(s.Rationale, want) {
+				t.Errorf("%s justification lacks %q:\n%s", sym, want, s.Rationale)
+			}
+		}
+	}
+	if r := p["ZAG.TO"].Rationale; !strings.Contains(r, "takes the share of every ETF below its 200-day average (XEF.TO)") {
+		t.Errorf("ZAG must say whose share it takes:\n%s", r)
+	}
+	if r := p["VFV.TO"].Rationale; !strings.Contains(r, "above its 200-day average") {
+		t.Errorf("VFV must cite its trend:\n%s", r)
+	}
 	// Another cycle the same day: nothing duplicated.
 	if res, _ := l.Cycle(ctx, "test"); len(res.Suggestions) != 0 {
 		t.Fatalf("re-proposed while pending: %v", res.Suggestions)
@@ -136,7 +154,7 @@ func TestSellsGoFirstAndBuysWait(t *testing.T) {
 	now := time.Date(2026, 11, 2, 11, 0, 0, 0, calendar.Toronto)
 	l, d := harness(t, &now)
 	// Start fully in XEF via an approved one-off suggestion.
-	s, v, err := d.Propose(ctx, "seed", desk.ProposeRequest{Symbol: "XEF.TO", Side: "buy", Qty: 130, Source: "test"})
+	s, v, err := d.Propose(ctx, "seed", desk.ProposeRequest{Rationale: testWhy, Symbol: "XEF.TO", Side: "buy", Qty: 130, Source: "test"})
 	if err != nil || s == nil {
 		t.Fatalf("seed: %v %v %v", s, v, err)
 	}
@@ -149,6 +167,11 @@ func TestSellsGoFirstAndBuysWait(t *testing.T) {
 	p := pendingBy(t, d)
 	if p["XEF.TO"].Side != "sell" || len(p) != 1 {
 		t.Fatalf("the XEF exit must be proposed alone (buys wait for its cash), got %v", p)
+	}
+	// A sell in a cash account says what it realizes, from the book's cost.
+	if r := p["XEF.TO"].Rationale; !strings.Contains(r, "Tax: realizes an estimated") || !strings.Contains(r, "cash account") ||
+		!strings.Contains(r, "below its 200-day average") || !strings.Contains(r, "Order: Sell 130 XEF.TO") {
+		t.Errorf("sell justification:\n%s", r)
 	}
 }
 
@@ -182,5 +205,35 @@ func TestPreviewIsReadOnly(t *testing.T) {
 	evs, _ := d.J.ByKinds(ctx, KindTargets, "suggestion.created")
 	if len(evs) != 0 {
 		t.Errorf("preview journaled %d events", len(evs))
+	}
+}
+
+const testWhy = "test: a justification long enough to pass"
+
+func TestShadowsRunAlongsideWithoutTouchingTheLiveBook(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 2, 11, 0, 0, 0, calendar.Toronto)
+	l, d := harness(t, &now)
+	l.Shadow = &shadow.Runner{J: d.J, Allocators: strategy.Candidates(syms), Symbols: syms, Thorn: d.Cfg.Thorn}
+	res, err := l.Cycle(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Suggestions) != 3 || len(pendingBy(t, d)) != 3 {
+		t.Fatalf("live suggestions changed with shadows on: %+v", res)
+	}
+	evs, _ := d.J.ByKinds(ctx, shadow.KindRebalanced)
+	if len(evs) != len(strategy.Candidates(syms)) {
+		t.Errorf("shadow rebalances = %d, want one per candidate", len(evs))
+	}
+	fills, _ := d.J.ByKinds(ctx, portfolio.KindFill)
+	for _, e := range fills {
+		if strings.Contains(string(e.Payload), `"book":"strategy"`) {
+			t.Errorf("nothing was approved, yet the strategy book has a fill: %s", e.Payload)
+		}
+	}
+	st, _ := d.LoadState(ctx)
+	if b := st.Books[portfolio.Strategy]; len(b.Positions) != 0 || b.Cash != 10000 {
+		t.Errorf("live book moved without an approval: %+v", b)
 	}
 }

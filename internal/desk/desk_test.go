@@ -86,7 +86,7 @@ func newHarness(t *testing.T) *harness {
 func (h *harness) proposeBuy(t *testing.T, qty int) *Suggestion {
 	t.Helper()
 	cand := &strategy.Candidate{Strategy: "momentum-v1", Symbol: "XIU.TO", Side: strategy.Buy, Qty: qty, RefPrice: 50, SignalOn: "2026-10-23"}
-	s, v, err := h.d.Propose(context.Background(), "c1", ProposeRequest{Symbol: "XIU.TO", Side: "buy", Qty: qty, Source: "rules", Candidate: cand})
+	s, v, err := h.d.Propose(context.Background(), "c1", ProposeRequest{Rationale: testWhy, Symbol: "XIU.TO", Side: "buy", Qty: qty, Source: "rules", Candidate: cand})
 	if err != nil || s == nil {
 		t.Fatalf("propose: (%v, %+v, %v)", s, v, err)
 	}
@@ -205,7 +205,7 @@ func TestProposeThornRejectionIsJournaled(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	h.md.set("GME", 20, monday)
-	s, v, err := h.d.Propose(ctx, "c1", ProposeRequest{Symbol: "GME", Side: "buy", Qty: 1, Source: "claude-code"})
+	s, v, err := h.d.Propose(ctx, "c1", ProposeRequest{Rationale: testWhy, Symbol: "GME", Side: "buy", Qty: 1, Source: "claude-code"})
 	if err != nil || s != nil || v.Allowed {
 		t.Fatalf("GME must be rejected by Thorn: (%v, %+v, %v)", s, v, err)
 	}
@@ -287,5 +287,17 @@ func TestReviewIsAdviceOnly(t *testing.T) {
 	st, _ := h.d.LoadState(ctx)
 	if len(st.Pending) != 1 || st.Pending[0].Qty != 10 || st.Books["strategy"].Fills != 0 {
 		t.Errorf("a review must not change the suggestion: %+v", st.Pending)
+	}
+}
+
+const testWhy = "test: a justification long enough to pass"
+
+func TestProposeRequiresAJustification(t *testing.T) {
+	h := newHarness(t)
+	for _, why := range []string{"", "   ", "too short"} {
+		s, _, err := h.d.Propose(context.Background(), "c1", ProposeRequest{Symbol: "XIU.TO", Side: "buy", Qty: 1, Source: "claude-code", Rationale: why})
+		if !errors.Is(err, ErrNoJustification) || s != nil {
+			t.Errorf("rationale %q: want ErrNoJustification, got (%v, %v)", why, s, err)
+		}
 	}
 }

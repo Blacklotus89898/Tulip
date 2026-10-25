@@ -35,6 +35,7 @@ import (
 	"github.com/Blacklotus89898/Tulip/internal/mcp"
 	"github.com/Blacklotus89898/Tulip/internal/notify"
 	"github.com/Blacklotus89898/Tulip/internal/questrade"
+	"github.com/Blacklotus89898/Tulip/internal/shadow"
 	"github.com/Blacklotus89898/Tulip/internal/strategy"
 	"github.com/Blacklotus89898/Tulip/internal/thorn"
 	"github.com/Blacklotus89898/Tulip/internal/web"
@@ -59,7 +60,7 @@ func main() {
 	dbPath := flag.String("db", "data/tulip.db", "journal database path")
 	mode := flag.String("mode", envOr("TULIP_MODE", "paper"), "paper | copilot (read-only Questrade, ADR 0003)")
 	symbols := flag.String("symbols", "XIU.TO,VFV.TO,XEF.TO,ZAG.TO", "symbols the rules scan (must be on Thorn's allowlist); the LAST is the safe asset for trend-filter-200")
-	strat := flag.String("strategy", envOr("TULIP_STRATEGY", "trend-filter-200"), "trend-filter-200 | equal-weight (monthly rebalance) | momentum-v1 (retired, see docs/backtests)")
+	strat := flag.String("strategy", envOr("TULIP_STRATEGY", "trend-filter-200"), "a pre-registered allocator (trend-filter-200, equal-weight, trend-ensemble, dual-momentum-12m, inverse-vol-60) | momentum-v1 (retired, see docs/backtests)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -147,17 +148,18 @@ func main() {
 	lp := &loop.Loop{Desk: d, MD: md, Strategy: strategy.Momentum{}, Symbols: splitList(*symbols), Log: logger, Hist: md}
 	switch syms := lp.Symbols; *strat {
 	case "momentum-v1":
-	case "trend-filter-200":
-		if len(syms) < 2 {
-			logger.Error("trend-filter-200 needs risk symbols plus a safe one (last)")
+	default:
+		a, ok := strategy.ByName(syms, *strat)
+		if !ok {
+			logger.Error("unknown -strategy (pre-registered: trend-filter-200, equal-weight, trend-ensemble, dual-momentum-12m, inverse-vol-60; universe = risk symbols then the safe one)", "strategy", *strat)
 			os.Exit(2)
 		}
-		lp.Allocator = strategy.TrendFilter{Risk: syms[:len(syms)-1], Safe: syms[len(syms)-1]}
-	case "equal-weight":
-		lp.Allocator = strategy.EqualWeight{Symbols: syms}
-	default:
-		logger.Error("unknown -strategy", "strategy", *strat)
-		os.Exit(2)
+		lp.Allocator = a
+	}
+	// Shadow books (ADR 0004): every pre-registered candidate, unapproved,
+	// on the live schedule. TULIP_SHADOW=off disables them.
+	if envOr("TULIP_SHADOW", "on") != "off" {
+		lp.Shadow = &shadow.Runner{J: j, Allocators: strategy.Candidates(lp.Symbols), Symbols: lp.Symbols, Thorn: thornCfg}
 	}
 	_, _ = j.Append(ctx, "service.started", "", map[string]any{
 		"version": version, "mode": *mode, "symbols": lp.Symbols, "thorn": thornCfg, "strategy": lp.StrategyName(),

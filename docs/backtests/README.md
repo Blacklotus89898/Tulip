@@ -66,3 +66,20 @@ default (`TULIP_STRATEGY=trend-filter-200`).
 
 Not covered: taxes, FX on VFV/XEF (CAD-hedged/unhedged mix is embedded in the
 ETF prices), regime risk (one 12-year sample, mostly a bull market).
+
+## 2026-10-25 — trend-ensemble added (ADR 0004 candidate set)
+
+Same method, both universes (`2026-10-25-compare-candidates.txt`,
+`2026-10-25-xiu-xbb-candidates.txt`), $4.95/order:
+
+| candidate | 4-ETF CAGR / max DD / trades | XIU+XBB 25y CAGR / max DD / trades |
+|---|---|---|
+| trend-filter-200 (live) | +9.2% / −22.6% / 115 | +8.7% / −23.8% / 77 |
+| trend-ensemble | +8.8% / −22.5% / 223 | **+9.6% / −19.8%** / 160 |
+| equal-weight hold | +10.4% / −24.9% / 4 | +7.3% / −29.3% / 4 |
+
+The ensemble is a tie on the 4-ETF universe and better over 25 years, but it
+trades about twice as often. In a cash account each sell is a taxable event,
+so its edge has to survive that (ADR 0004 §4). It was added after the
+lookback sensitivity was seen (mild look-ahead), so it is judged by the
+shadow books, not by this table.

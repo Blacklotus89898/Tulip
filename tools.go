@@ -10,6 +10,7 @@ import (
 	"github.com/Blacklotus89898/Tulip/internal/journal"
 	"github.com/Blacklotus89898/Tulip/internal/loop"
 	"github.com/Blacklotus89898/Tulip/internal/mcp"
+	"github.com/Blacklotus89898/Tulip/internal/shadow"
 )
 
 // tools is the MCP supervision surface for Claude Code (ADR 0002 §3). Every
@@ -129,6 +130,25 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 					return pretty(map[string]any{"error": "data unavailable — failing closed", "unavailable": unavailable})
 				}
 				return pretty(p)
+			},
+		},
+		{
+			Name: "scorecard",
+			Description: "READ-ONLY: every book compared from a common start — the live paper book, the XIU benchmark and " +
+				"the shadow book of each pre-registered candidate (ADR 0004): return, max drawdown, trades, sells " +
+				"(taxable in a cash account), fees, realized P&L — plus what each candidate would hold on today's " +
+				"completed bars, with its reasons. Promotion is the operator's decision (12 months + backtest gate).",
+			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+				card, err := shadow.Build(ctx, j)
+				if err != nil {
+					return "", err
+				}
+				decisions, asOf, unavailable, err := lp.CandidateDecisions(ctx)
+				if err != nil {
+					return "", err
+				}
+				return pretty(map[string]any{"live_strategy": lp.StrategyName(), "scorecard": card,
+					"candidates_now": decisions, "signals_as_of": asOf, "unavailable": unavailable})
 			},
 		},
 		{

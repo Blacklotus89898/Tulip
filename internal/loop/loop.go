@@ -15,6 +15,7 @@ import (
 	"github.com/Blacklotus89898/Tulip/internal/desk"
 	"github.com/Blacklotus89898/Tulip/internal/marketdata"
 	"github.com/Blacklotus89898/Tulip/internal/portfolio"
+	"github.com/Blacklotus89898/Tulip/internal/shadow"
 	"github.com/Blacklotus89898/Tulip/internal/strategy"
 )
 
@@ -44,8 +45,11 @@ type Loop struct {
 	Allocator strategy.Allocator
 	Hist      HistorySource // adjusted history for the allocator
 	Band      float64       // rebalance drift band (default 0.03)
-	Log       *slog.Logger
-	Now       func() time.Time
+	// Shadow, when set, runs the pre-registered candidates as unapproved
+	// paper books on the same schedule (ADR 0004).
+	Shadow *shadow.Runner
+	Log    *slog.Logger
+	Now    func() time.Time
 	// RunAt are the Toronto wall-clock cycle times on trading days.
 	RunAt []string // default 10:05, 15:00
 }
@@ -99,8 +103,13 @@ func (l *Loop) Cycle(ctx context.Context, trigger string) (Result, error) {
 		_, _ = j.Append(ctx, "data.unavailable", cycle, map[string]string{"symbol": "benchmark", "error": err.Error()})
 	}
 	_ = l.Desk.Mark(ctx)
+	hist := newMemoHist(l.Hist)
+	if l.Shadow != nil {
+		// After the live strategy (deferred), sharing its history fetches.
+		defer l.shadowCycle(ctx, cycle, hist)
+	}
 	if l.Allocator != nil {
-		return res, l.rebalance(ctx, cycle, &res)
+		return res, l.rebalance(ctx, cycle, hist, &res)
 	}
 
 	// Sizing comes from the real account in co-pilot mode (ADR 0003): if it

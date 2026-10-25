@@ -13,7 +13,7 @@ import (
 var allowedTools = map[string]bool{
 	"tulip_status": true, "journal_list": true, "portfolio": true, "suggestions_pending": true,
 	"propose": true, "review_suggestion": true, "decline": true, "kill_switch_arm": true, "cycle_run": true,
-	"broker_account": true, "rebalance_preview": true, // read-only
+	"broker_account": true, "rebalance_preview": true, "scorecard": true, // read-only
 }
 
 func TestMCPToolsAreAllowlisted(t *testing.T) {
@@ -30,7 +30,7 @@ func TestMCPToolsAreAllowlisted(t *testing.T) {
 // broker.Fill for the strategy book is reachable only from desk.Approve:
 // no other file in the service may call it.
 func TestFillOnlyFromTheApprovalPath(t *testing.T) {
-	for _, path := range []string{"main.go", "tools.go", "internal/loop/loop.go", "internal/web/web.go", "internal/mcp/mcp.go", "internal/notify/notify.go", "copilot.go", "internal/desk/copilot.go"} {
+	for _, path := range []string{"main.go", "tools.go", "internal/loop/loop.go", "internal/loop/shadow.go", "internal/loop/rebalance.go", "internal/web/web.go", "internal/mcp/mcp.go", "internal/notify/notify.go", "copilot.go", "internal/desk/copilot.go", "internal/shadow/shadow.go", "internal/shadow/scorecard.go"} {
 		src, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -51,5 +51,27 @@ func TestQuestradeClientIsReadOnly(t *testing.T) {
 		if strings.Contains(string(src), bad) {
 			t.Errorf("internal/questrade/client.go contains %q — the broker client must stay read-only", bad)
 		}
+	}
+}
+
+// Shadow books (ADR 0004) are measurement: they trade only in their own
+// journal kinds, never the live ledger, never via the broker or the desk —
+// and the scorecard only reads.
+func TestShadowBooksCannotTouchTheLiveLedger(t *testing.T) {
+	src, err := os.ReadFile("internal/shadow/shadow.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"portfolio.KindFill", "portfolio.KindFunded", "\"order.filled\"", "broker.", "desk.", ".Propose(", ".Approve("} {
+		if strings.Contains(string(src), bad) {
+			t.Errorf("internal/shadow/shadow.go contains %q — shadows must stay out of the live path", bad)
+		}
+	}
+	card, err := os.ReadFile("internal/shadow/scorecard.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(card), ".Append(") {
+		t.Error("the scorecard must be read-only")
 	}
 }
