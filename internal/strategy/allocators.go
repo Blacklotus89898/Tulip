@@ -63,7 +63,7 @@ func (e EqualWeight) Decide(map[string][]marketdata.Candle) (Decision, error) {
 	w := 1 / float64(len(e.Symbols))
 	for _, s := range e.Symbols {
 		d.Targets[s] = w
-		d.Reasons[s] = fmt.Sprintf("Equal weight: every ETF holds 1/%d (%s), rebalanced monthly.", len(e.Symbols), pct(w))
+		d.Reasons[s] = fmt.Sprintf("%s holds 1/%d (%s): equal weight, rebalanced monthly back to %s.", s, len(e.Symbols), pct(w), pct(w))
 	}
 	return d, nil
 }
