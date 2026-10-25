@@ -3,6 +3,7 @@ package shadow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -161,5 +162,59 @@ func TestScorecardFromTheCommonStart(t *testing.T) {
 func TestLiveMarkKindIsTheDesks(t *testing.T) {
 	if LiveMarkKind != desk.KindMark {
 		t.Fatalf("LiveMarkKind %q != desk.KindMark %q", LiveMarkKind, desk.KindMark)
+	}
+}
+
+// With production's 10k per-order cap, a book that grew past 10k must still
+// rotate in full (the cap is relaxed for shadows, ADR 0004 §2).
+func TestRotationAfterAGainIsNotCappedByOrderValue(t *testing.T) {
+	ctx := context.Background()
+	r, j := runner(t)
+	r.Thorn.MaxOrderValue = 10000
+	r.Allocators = []strategy.Allocator{strategy.DualMomentum{Risk: syms[:3], Safe: "ZAG.TO", Lookback: 200}}
+	r.Cycle(ctx, Input{Cycle: "c1", Day: "2026-11-02", Month: "2026-11", InWindow: true, Bars: bars(), Quotes: quotes(1)})
+	// A month later, after a 20% gain, the best ETF changes: XEF now leads.
+	b := bars()
+	for i := range b["XEF.TO"] {
+		c := 20 + 0.2*float64(i)
+		b["XEF.TO"][i].Open, b["XEF.TO"][i].High, b["XEF.TO"][i].Low, b["XEF.TO"][i].Close = c, c, c, c
+	}
+	r.Cycle(ctx, Input{Cycle: "c2", Day: "2026-12-01", Month: "2026-12", InWindow: true, Bars: b, Quotes: quotes(1.2)})
+	if n := count(t, j, KindRejected); n != 0 {
+		t.Fatalf("rotation rejected %d orders — the per-order cap must not freeze a grown shadow book", n)
+	}
+	evs, _ := j.ByKinds(ctx, KindFill)
+	if len(evs) != 3 { // buy, then sell + buy
+		t.Fatalf("fills = %d, want 3", len(evs))
+	}
+	var last portfolio.Fill
+	_ = json.Unmarshal(evs[2].Payload, &last)
+	if last.Symbol != "XEF.TO" || float64(last.Qty)*last.Price <= 10000 {
+		t.Errorf("rotation buy = %+v (want XEF worth more than the 10k live cap)", last)
+	}
+}
+
+// Overlapping cycles (schedule + MCP cycle_run) must not double-trade a book.
+func TestConcurrentCyclesDoNotDoubleFill(t *testing.T) {
+	ctx := context.Background()
+	r, j := runner(t)
+	in := Input{Day: "2026-11-02", Month: "2026-11", InWindow: true, Bars: bars(), Quotes: quotes(1)}
+	done := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		go func(i int) {
+			c := in
+			c.Cycle = fmt.Sprintf("c%d", i)
+			r.Cycle(ctx, c)
+			done <- struct{}{}
+		}(i)
+	}
+	for i := 0; i < 4; i++ {
+		<-done
+	}
+	if n := count(t, j, KindRebalanced); n != len(r.Allocators) {
+		t.Errorf("rebalances = %d, want exactly one per book", n)
+	}
+	if n := count(t, j, KindFunded); n != len(r.Allocators) {
+		t.Errorf("fundings = %d, want exactly one per book", n)
 	}
 }

@@ -42,10 +42,11 @@ approves. It runs on the live schedule (first 5 trading days of each month),
 on bars completed before the month started, at that cycle's quotes with the
 paper broker's 10 bps slippage, using the shared order code
 (`strategy.Rebalance`). Each order passes Thorn with the live limits **except
-the position-weight caps**: those are sized for the live strategy and would
-be re-tuned if a candidate were promoted (otherwise dual momentum, 100% in one
-ETF, would sit in cash and measure nothing). Allowlist, cash, no-shorting and
-order-value rules all stand. Rejections are journaled.
+the position-weight and order-value caps**: those are sized for the live
+strategy and its 10k book, and would be re-tuned if a candidate were promoted.
+Otherwise dual momentum (100% in one ETF) would sit in cash, or would be
+refused its first rotation once its book outgrew the per-order cap. The
+allowlist, cash and no-shorting rules stand. Rejections are journaled.
 
 Shadows write only `shadow.*` journal kinds and never call the broker or the
 desk (pinned by `tools_test.go`). The live book's "no fill without a human

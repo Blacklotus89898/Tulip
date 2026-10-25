@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/Blacklotus89898/Tulip/internal/calendar"
@@ -48,8 +49,10 @@ type Loop struct {
 	// Shadow, when set, runs the pre-registered candidates as unapproved
 	// paper books on the same schedule (ADR 0004).
 	Shadow *shadow.Runner
-	Log    *slog.Logger
-	Now    func() time.Time
+
+	cycleMu sync.Mutex // the schedule and MCP cycle_run must not interleave
+	Log     *slog.Logger
+	Now     func() time.Time
 	// RunAt are the Toronto wall-clock cycle times on trading days.
 	RunAt []string // default 10:05, 15:00
 }
@@ -80,6 +83,8 @@ type Result struct {
 // Cycle runs observe → propose once. Safe to call any time: outside market
 // hours it only expires and marks nothing new.
 func (l *Loop) Cycle(ctx context.Context, trigger string) (Result, error) {
+	l.cycleMu.Lock()
+	defer l.cycleMu.Unlock()
 	cycle := newCycleID()
 	j := l.Desk.J
 	open, calErr := calendar.IsOpen(l.now())

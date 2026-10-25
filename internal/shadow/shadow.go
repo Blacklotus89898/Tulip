@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/Blacklotus89898/Tulip/internal/journal"
@@ -48,6 +49,8 @@ type Runner struct {
 	Slippage   float64      // fraction (default 0.001 = 10 bps, = the paper broker)
 	Fee        float64      // per order (default 0; the scorecard reports fees separately)
 	Band       float64      // rebalance drift band (default 0.03, = live)
+
+	mu sync.Mutex
 }
 
 func (r *Runner) cash() float64 {
@@ -88,6 +91,8 @@ type Input struct {
 // shadow book. Errors are per book and journaled; the caller never fails on
 // a shadow (they are measurement, not trading).
 func (r *Runner) Cycle(ctx context.Context, in Input) {
+	r.mu.Lock() // replay → decide → write must not interleave (double fills)
+	defer r.mu.Unlock()
 	evs, err := r.J.ByKinds(ctx, KindFunded, KindFill, KindRebalanced, KindMark)
 	if err != nil {
 		_, _ = r.J.Append(ctx, KindError, in.Cycle, map[string]string{"error": err.Error()})
@@ -162,12 +167,13 @@ func (r *Runner) rebalance(ctx context.Context, in Input, a strategy.Allocator, 
 	}
 	equity := b.Equity(px)
 	sells, buys := strategy.Rebalance(r.Symbols, dec.Targets, held, px, equity, r.band(), r.slip())
-	// Position-weight caps are sized for the LIVE strategy and would be
-	// re-tuned on promotion; applied here they'd leave e.g. dual momentum (one
-	// ETF at 100%) in cash, measuring nothing. Every other rule stands:
-	// allowlist, cash, no shorting, order value (ADR 0004).
+	// Position-weight and order-value caps are sized for the LIVE strategy
+	// and book and would be re-tuned on promotion; applied here they'd leave
+	// e.g. dual momentum (one ETF at 100%) in cash, or refuse its rotation
+	// once the book outgrows the per-order cap. Every other rule stands:
+	// allowlist, cash, no shorting (ADR 0004).
 	cfg := r.Thorn
-	cfg.MaxPositionWeight, cfg.MaxWeightBySymbol = 1, nil
+	cfg.MaxPositionWeight, cfg.MaxWeightBySymbol, cfg.MaxOrderValue = 1, nil, math.Inf(1)
 	fills, rejected := 0, 0
 	for _, o := range append(sells, buys...) {
 		side, qty := "buy", o.Qty
