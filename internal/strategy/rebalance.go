@@ -7,10 +7,10 @@ import (
 
 // Order is a whole-share delta: positive buys, negative sells.
 type Order struct {
-	Symbol string `json:"symbol"`
-	Qty    int    `json:"qty"`
-	Target float64
-	Now    float64 // current weight
+	Symbol string  `json:"symbol"`
+	Qty    int     `json:"qty"`
+	Target float64 `json:"target_weight"`
+	Now    float64 `json:"current_weight"`
 }
 
 // Rebalance turns target weights into orders — the ONE implementation the

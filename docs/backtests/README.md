@@ -45,5 +45,24 @@ Sensitivity (commission 0):
    alpha. Any future strategy must beat equal-weight hold on the holdout,
    after $4.95 commissions, and survive lookback sensitivity.
 
+## 2026-10-24 — 25 years through 2008: XIU + XBB (bonds), 2001-12 → 2026-10
+
+The 4-ETF test above never saw a real crash (VFV/XEF start 2012–13). XIU and
+XBB go back through 2008 and 2020 (`-compare -symbols XIU.TO,XBB.TO`;
+holdout from 2019-05).
+
+| candidate | CAGR | max DD | Sharpe | holdout CAGR |
+|---|---|---|---|---|
+| **trend-filter-200** | +8.8% | **−24%** | 0.77 | +11.7% |
+| buy & hold XIU | +9.3% | **−48%** | 0.62 | +14.1% |
+| equal-weight hold (50/50) | +7.3% | −29% | 0.78 | +10.2% |
+| momentum-v1 | +0.6% | −6% | 0.31 | +0.5% |
+
+Trend-filter lookbacks 100/150/200/250 d → CAGR 8.8–10.5%, max DD −20 to −24%:
+robust. **This is the trend filter's case: it halves the crash drawdown for
+≈0.5%/yr less return than all-equity**, and beats a static 50/50 on return.
+It lags in fast V-shaped recoveries (holdout includes 2020). It is the live
+default (`TULIP_STRATEGY=trend-filter-200`).
+
 Not covered: taxes, FX on VFV/XEF (CAD-hedged/unhedged mix is embedded in the
 ETF prices), regime risk (one 12-year sample, mostly a bull market).

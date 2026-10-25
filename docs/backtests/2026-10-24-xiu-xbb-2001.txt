@@ -1,0 +1,35 @@
+universe: risk [XIU.TO] · safe XBB.TO
+
+=== commission 0.00 per order · slippage 10 bps · dividend-adjusted · fills next open ===
+                      candidate   CAGR  Max DD  Sharpe  HOLDOUT CAGR  holdout DD  trades  exposure
+        momentum-v1 (live caps)  +0.6%   -6.0%    0.31         +0.5%       -4.7%    1064       23%
+     momentum-v1 (caps relaxed)  +0.6%   -6.0%    0.31         +0.5%       -4.7%    1064       23%
+                   equal-weight  +6.6%  -26.2%    0.80         +7.7%      -22.6%      51      100%
+               trend-filter-200  +8.8%  -23.6%    0.77        +11.7%      -19.8%      77      100%
+              dual-momentum-12m  +8.7%  -22.4%    0.78         +9.9%      -19.8%      55      100%
+                 inverse-vol-60  +5.3%  -19.7%    0.93         +4.7%      -19.7%     220      100%
+     buy & hold XIU (benchmark)  +9.3%  -47.9%    0.62        +14.1%      -35.5%       1      100%
+  equal-weight hold (benchmark)  +7.3%  -29.3%    0.78        +10.2%      -24.7%       4      100%
+period 2001-12-05 → 2026-10-23 · holdout from 2019-05-06
+sensitivity (same rules, neighbouring lookbacks — robust = similar numbers):
+             variant    CAGR  Max DD  Sharpe  holdout CAGR
+  dual-momentum 126d   +7.1%  -38.9%    0.61         +9.1%
+  dual-momentum 189d   +8.3%  -23.6%    0.77        +11.0%
+  dual-momentum 252d   +8.8%  -22.4%    0.80        +10.4%
+  dual-momentum 315d   +8.9%  -40.9%    0.76         +9.9%
+   trend-filter 100d  +10.5%  -19.8%    0.96        +11.3%
+   trend-filter 150d  +10.1%  -23.3%    0.88        +14.2%
+   trend-filter 200d   +8.8%  -23.6%    0.78        +12.2%
+   trend-filter 250d   +9.4%  -23.6%    0.83        +11.2%
+
+=== commission 4.95 per order · slippage 10 bps · dividend-adjusted · fills next open ===
+                      candidate   CAGR  Max DD  Sharpe  HOLDOUT CAGR  holdout DD  trades  exposure
+        momentum-v1 (live caps)  -2.0%  -41.1%   -0.98         -2.5%      -17.6%    1064       23%
+     momentum-v1 (caps relaxed)  -2.0%  -41.1%   -0.98         -2.5%      -17.6%    1064       23%
+                   equal-weight  +6.6%  -26.3%    0.79         +7.7%      -22.6%      51      100%
+               trend-filter-200  +8.7%  -23.8%    0.77        +11.7%      -19.8%      77      100%
+              dual-momentum-12m  +8.6%  -22.5%    0.78         +9.9%      -19.8%      55      100%
+                 inverse-vol-60  +5.0%  -19.7%    0.89         +4.5%      -19.7%     218      100%
+     buy & hold XIU (benchmark)  +9.3%  -47.9%    0.62        +14.1%      -35.4%       1      100%
+  equal-weight hold (benchmark)  +7.3%  -29.3%    0.78        +10.2%      -24.7%       4      100%
+period 2001-12-05 → 2026-10-23 · holdout from 2019-05-06

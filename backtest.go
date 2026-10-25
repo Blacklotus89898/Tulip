@@ -154,10 +154,11 @@ func printSweep(grid []*backtest.Result) {
 // allocators (they hold up to 100% in one ETF) — this measures strategy
 // merit; live caps are re-tuned to whichever wins, a separate decision.
 func runCompare(bars map[string][]marketdata.Candle, syms []string, base backtest.Config, commissions []float64) error {
-	if len(syms) != 4 || syms[3] != "ZAG.TO" {
-		return fmt.Errorf("-compare expects the default universe ending in the bond ETF ZAG.TO")
+	if len(syms) < 2 {
+		return fmt.Errorf("-compare needs risk symbols plus a safe one (last), e.g. XIU.TO,XBB.TO")
 	}
-	risk, safe := syms[:3], syms[3]
+	risk, safe := syms[:len(syms)-1], syms[len(syms)-1]
+	fmt.Printf("universe: risk %v · safe %s\n", risk, safe)
 	relaxed := base.Thorn
 	relaxed.MaxOrderValue, relaxed.MaxPositionWeight = 1e12, 1
 	allocs := []strategy.Allocator{
