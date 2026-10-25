@@ -237,3 +237,24 @@ func TestShadowsRunAlongsideWithoutTouchingTheLiveBook(t *testing.T) {
 		t.Errorf("live book moved without an approval: %+v", b)
 	}
 }
+
+func TestScorecardPushedOncePerMonth(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 2, 11, 0, 0, 0, calendar.Toronto)
+	l, d := harness(t, &now)
+	l.Shadow = &shadow.Runner{J: d.J, Allocators: strategy.Candidates(syms), Symbols: syms, Thorn: d.Cfg.Thorn}
+	var titles []string
+	l.Report = func(_ context.Context, title, body string) error {
+		titles = append(titles, title)
+		return nil
+	}
+	for _, at := range []time.Time{now, now.Add(4 * time.Hour), now.AddDate(0, 0, 1)} {
+		now = at
+		if _, err := l.Cycle(ctx, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(titles) != 1 || titles[0] != "Tulip scorecard — November 2026" {
+		t.Errorf("pushes = %v, want exactly one for November", titles)
+	}
+}

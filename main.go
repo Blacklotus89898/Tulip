@@ -161,6 +161,11 @@ func main() {
 	if envOr("TULIP_SHADOW", "on") != "off" {
 		lp.Shadow = &shadow.Runner{J: j, Allocators: strategy.Candidates(lp.Symbols), Symbols: lp.Symbols, Thorn: thornCfg}
 	}
+	// Monthly scorecard push (after each month's shadow rebalance), linking
+	// to the read-only /scorecard page.
+	lp.Report = func(ctx context.Context, title, body string) error {
+		return pager.Message(ctx, title, body, "/scorecard")
+	}
 	_, _ = j.Append(ctx, "service.started", "", map[string]any{
 		"version": version, "mode": *mode, "symbols": lp.Symbols, "thorn": thornCfg, "strategy": lp.StrategyName(),
 		"approvals_enabled": passHash != "", "notify": pager.URL != "", "brain": lp.Brain != nil,
@@ -178,7 +183,18 @@ func main() {
 	})
 	mux.HandleFunc("GET /metrics", metricsHandler(j, d, acct))
 	mux.Handle("POST /mcp", requireToken(token, mcp.New("tulip", version, tools(d, lp, j)...)))
-	web.Register(mux, d) // the operator's approval page (passphrase-gated)
+	web.Register(mux, d)                                                               // the operator's approval page (passphrase-gated)
+	web.RegisterScorecard(mux, func(ctx context.Context) (*web.ScorecardData, error) { // read-only (ADR 0004)
+		card, err := shadow.Build(ctx, j)
+		if err != nil {
+			return nil, err
+		}
+		dec, asOf, unavailable, err := lp.CandidateDecisions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &web.ScorecardData{Live: lp.StrategyName(), Card: card, Candidates: dec, AsOf: asOf, Unavailable: unavailable}, nil
+	})
 
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)

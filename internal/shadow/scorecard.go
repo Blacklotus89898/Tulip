@@ -3,6 +3,7 @@ package shadow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -158,4 +159,73 @@ func Build(ctx context.Context, j *journal.Journal) (*Card, error) {
 	card.Note = "Measured from the common start (first shadow rebalance). Candidates trade instantly at the rebalance cycle's quotes; the live book trades when you approve, so live vs shadow:" +
 		"trend-filter-200 is the cost of approval timing. Differences under ~12 months are noise — the promotion rule (ADR 0004) needs 12 months and the backtest gate."
 	return card, nil
+}
+
+// Summary is the monthly push (ntfy): short — the page has the detail. In
+// the first month there is nothing to compare yet, so it lists what each
+// candidate bought instead.
+func (c *Card) Summary(month, live string) (title, body string) {
+	title = "Tulip scorecard — " + month
+	var b strings.Builder
+	if c.Since == "" {
+		return title, "No shadow rebalance yet."
+	}
+	rows := append([]Row(nil), c.Rows...)
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ReturnPct > rows[j].ReturnPct })
+	label := func(r Row) string {
+		switch {
+		case r.Role == "live":
+			return "your paper book"
+		case r.Role == "benchmark":
+			return "XIU hold"
+		}
+		n := strings.TrimPrefix(r.Book, Prefix)
+		if n == live {
+			n += " (live)"
+		}
+		return n
+	}
+	if c.Days <= 1 {
+		fmt.Fprintf(&b, "Shadow books started %s. First comparison next month. Positions:\n", c.Since)
+		for _, r := range rows {
+			if r.Role != "candidate" {
+				continue
+			}
+			fmt.Fprintf(&b, "%s: %s\n", label(r), weights(r.Targets))
+		}
+		return title, strings.TrimSpace(b.String())
+	}
+	fmt.Fprintf(&b, "Since %s (%d trading days): return · max drop · sells\n", c.Since, c.Days)
+	for _, r := range rows {
+		if r.StartEquity == 0 {
+			fmt.Fprintf(&b, "%s: not started\n", label(r))
+			continue
+		}
+		fmt.Fprintf(&b, "%s: %+.1f%% · %.1f%% · %d\n", label(r), r.ReturnPct, r.MaxDDPct, r.Sells)
+	}
+	b.WriteString("Under 12 months this is noise (ADR 0004).")
+	return title, b.String()
+}
+
+func weights(t map[string]float64) string {
+	syms := make([]string, 0, len(t))
+	for s, w := range t {
+		if w > 0.0005 {
+			syms = append(syms, s)
+		}
+	}
+	if len(syms) == 0 {
+		return "cash"
+	}
+	sort.Slice(syms, func(i, j int) bool {
+		if t[syms[i]] != t[syms[j]] {
+			return t[syms[i]] > t[syms[j]]
+		}
+		return syms[i] < syms[j]
+	})
+	parts := make([]string, 0, len(syms))
+	for _, s := range syms {
+		parts = append(parts, fmt.Sprintf("%s %.0f%%", strings.TrimSuffix(s, ".TO"), t[s]*100))
+	}
+	return strings.Join(parts, " ")
 }

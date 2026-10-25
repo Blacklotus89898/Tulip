@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,5 +217,27 @@ func TestConcurrentCyclesDoNotDoubleFill(t *testing.T) {
 	}
 	if n := count(t, j, KindFunded); n != len(r.Allocators) {
 		t.Errorf("fundings = %d, want exactly one per book", n)
+	}
+}
+
+func TestMonthlySummaryIsShortAndHonest(t *testing.T) {
+	ctx := context.Background()
+	r, j := runner(t)
+	r.Cycle(ctx, Input{Cycle: "c1", Day: "2026-11-02", Month: "2026-11", InWindow: true, Bars: bars(), Quotes: quotes(1)})
+	card, _ := Build(ctx, j)
+	title, body := card.Summary("November 2026", "trend-filter-200")
+	if title != "Tulip scorecard — November 2026" || !strings.Contains(body, "First comparison next month") ||
+		!strings.Contains(body, "trend-filter-200 (live): ") {
+		t.Errorf("first month:\n%s\n%s", title, body)
+	}
+	r.Cycle(ctx, Input{Cycle: "c2", Day: "2026-11-03", Month: "2026-11", InWindow: true, Bars: bars(), Quotes: quotes(1.02)})
+	card, _ = Build(ctx, j)
+	_, body = card.Summary("December 2026", "trend-filter-200")
+	if !strings.Contains(body, "return · max drop · sells") || !strings.Contains(body, "noise") ||
+		!strings.Contains(body, "your paper book: not started") {
+		t.Errorf("later month:\n%s", body)
+	}
+	if len(body) > 1000 {
+		t.Errorf("push body is %d bytes — keep it short", len(body))
 	}
 }

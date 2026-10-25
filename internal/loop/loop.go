@@ -49,6 +49,8 @@ type Loop struct {
 	// Shadow, when set, runs the pre-registered candidates as unapproved
 	// paper books on the same schedule (ADR 0004).
 	Shadow *shadow.Runner
+	// Report sends the monthly scorecard push (title, body); nil = off.
+	Report func(ctx context.Context, title, body string) error
 
 	cycleMu sync.Mutex // the schedule and MCP cycle_run must not interleave
 	Log     *slog.Logger

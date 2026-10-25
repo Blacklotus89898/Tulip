@@ -74,3 +74,34 @@ func Summary(rationale string) string {
 	}
 	return line
 }
+
+// Message sends an informational push (the monthly scorecard): normal
+// priority, a click-through link, no actions.
+func (n Ntfy) Message(ctx context.Context, title, body, path string) error {
+	if n.URL == "" || n.Topic == "" {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(n.URL, "/")+"/"+n.Topic, strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Title", title)
+	req.Header.Set("Tags", "tulip,bar_chart")
+	req.Header.Set("Priority", "3")
+	if path != "" {
+		req.Header.Set("Click", strings.TrimRight(n.PublicURL, "/")+path)
+	}
+	cl := n.Client
+	if cl == nil {
+		cl = &http.Client{Timeout: 10 * time.Second}
+	}
+	resp, err := cl.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("ntfy: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}

@@ -94,6 +94,11 @@ Full reasoning in [ADR 0001](docs/adr/0001-architecture.md).
   max drawdown, trades, sells, fees, realized P&L, plus what each candidate
   would hold today and why. The promotion rule (12 months + backtest gate,
   operator decides) is in ADR 0004.
+- **`/scorecard` page** (read-only, phone-friendly): the same comparison
+  plus each candidate's current holdings and reasons. Cached for 10 minutes.
+- **Monthly push:** one ntfy message per month, right after that month's
+  shadow rebalance. It gives return, max drop and sells per book, and opens
+  `/scorecard` when tapped. In the first month it lists positions instead.
 
 ## Co-pilot mode (Questrade, real account — ADR 0003)
 

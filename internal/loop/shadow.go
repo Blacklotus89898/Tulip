@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/Blacklotus89898/Tulip/internal/calendar"
@@ -34,4 +35,51 @@ func (l *Loop) shadowCycle(ctx context.Context, cycle string, hist HistorySource
 		in.Quotes[s] = q
 	}
 	l.Shadow.Cycle(ctx, in)
+	if in.InWindow {
+		l.monthlyReport(ctx, cycle, in.Month)
+	}
+}
+
+// KindScorecardSent closes a month's scorecard push (once per month).
+const KindScorecardSent = "scorecard.sent"
+
+// monthlyReport pushes the scorecard once per month, right after that
+// month's shadow rebalance. A failed send is journaled and retried next cycle.
+func (l *Loop) monthlyReport(ctx context.Context, cycle, month string) {
+	if l.Report == nil {
+		return
+	}
+	evs, err := l.Desk.J.ByKinds(ctx, shadow.KindRebalanced, KindScorecardSent)
+	if err != nil {
+		return
+	}
+	rebalanced := false
+	for _, e := range evs {
+		var m struct{ Month string }
+		if json.Unmarshal(e.Payload, &m) != nil || m.Month != month {
+			continue
+		}
+		if e.Kind == KindScorecardSent {
+			return // already sent this month
+		}
+		rebalanced = true
+	}
+	if !rebalanced {
+		return
+	}
+	card, err := shadow.Build(ctx, l.Desk.J)
+	if err != nil {
+		_, _ = l.Desk.J.Append(ctx, "scorecard.error", cycle, map[string]string{"month": month, "error": err.Error()})
+		return
+	}
+	label := month
+	if t, err := time.Parse("2006-01", month); err == nil {
+		label = t.Format("January 2006")
+	}
+	title, body := card.Summary(label, l.StrategyName())
+	if err := l.Report(ctx, title, body); err != nil {
+		_, _ = l.Desk.J.Append(ctx, "scorecard.error", cycle, map[string]string{"month": month, "error": err.Error()})
+		return
+	}
+	_, _ = l.Desk.J.Append(ctx, KindScorecardSent, cycle, map[string]string{"month": month, "title": title})
 }
