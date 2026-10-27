@@ -1,6 +1,7 @@
 // Package loop is Tulip's autonomy (ADR 0001 §1): wake on schedule during TSX
 // sessions, observe, let the rules (and later the brain) propose, gate, and
-// suggest. It never executes — execution only follows a human approval.
+// suggest. It never executes on its own — execution follows a human approval,
+// or, in operator-enabled paper training (ADR 0005), the rules' own fills.
 package loop
 
 import (

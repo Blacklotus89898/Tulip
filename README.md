@@ -58,6 +58,10 @@ Full reasoning in [ADR 0001](docs/adr/0001-architecture.md).
   **your passphrase**. It executes at once — only during TSX hours, at a fresh
   quote newer than the signal bar, inside the price band, after Thorn re-checks.
   Unapproved suggestions expire after 30 minutes.
+- **Paper training** (ADR 0005): `TULIP_AUTOEXECUTE=paper` fills the rules'
+  own suggestions in the paper book without approval (same execution checks,
+  journaled `order.auto_executed`). Paper mode only; MCP/brain proposals still
+  wait for a human.
 - **Set the passphrase** (once, on your own machine — only the hash goes in
   the cluster):
   ```bash

@@ -1,6 +1,8 @@
 // Package desk turns proposals into suggestions and — only with the
 // operator's approval — into paper fills (ADR 0002 §3). It is the ONLY place
-// broker.Fill is called for the strategy book, and only from Approve.
+// broker.Fill is called for the strategy book: from Approve, or — in the
+// operator-enabled paper-training mode (ADR 0005) — from AutoExecute, for the
+// rules' own suggestions only.
 //
 // All state is derived from journal events; the desk serialises its own
 // writes with a mutex (one process, one SQLite writer).
@@ -113,6 +115,7 @@ type Desk struct {
 	Limiter        *approval.Limiter
 	Notify         func(Suggestion) // set by the service (ntfy); may be nil
 	Account        AccountSource    // co-pilot mode (ADR 0003): the real account; nil = paper
+	AutoPaper      bool             // paper training (ADR 0005): rules suggestions fill without approval
 	Now            func() time.Time
 
 	mu sync.Mutex
@@ -335,7 +338,7 @@ func (d *Desk) Propose(ctx context.Context, cycle string, r ProposeRequest) (*Su
 	if _, err := d.J.Append(ctx, KindSuggestionCreated, cycle, s); err != nil {
 		return nil, verdict, err
 	}
-	if d.Notify != nil {
+	if d.Notify != nil && !(d.AutoPaper && s.Source == "rules") { // auto-filled: nothing to approve
 		d.Notify(s)
 	}
 	return &s, verdict, nil
@@ -459,7 +462,6 @@ func (d *Desk) Approve(ctx context.Context, id, displayedHash, passphrase string
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	cfg := d.cfg()
 
 	s, err := d.pending(ctx, id)
 	if err != nil {
@@ -480,8 +482,14 @@ func (d *Desk) Approve(ctx context.Context, id, displayedHash, passphrase string
 		return nil, d.deny(ctx, id, who, err)
 	}
 	_, _ = d.J.Append(ctx, KindApprovalAccepted, "", map[string]string{"id": id, "ip": who.IP, "user_agent": who.UserAgent})
+	return d.execute(ctx, s, now)
+}
 
-	// ---- execution checks: fresh quote, no lookahead, band, Thorn again ----
+// execute runs the execution checks — fresh quote, no lookahead, band, Thorn
+// again — and fills. The caller holds d.mu and has claimed the suggestion.
+func (d *Desk) execute(ctx context.Context, s *Suggestion, now time.Time) (*portfolio.Fill, error) {
+	cfg := d.cfg()
+	id := s.ID
 	reject := func(reasons ...string) (*portfolio.Fill, error) {
 		_, _ = d.J.Append(ctx, KindOrderRejected, "", map[string]any{"id": id, "reasons": reasons})
 		return nil, fmt.Errorf("order rejected at execution: %s", strings.Join(reasons, "; "))
@@ -525,6 +533,45 @@ func (d *Desk) Approve(ctx context.Context, id, displayedHash, passphrase string
 		return nil, err
 	}
 	return &fill, nil
+}
+
+// ---- paper training: auto-execution (Tulip ADR 0005) ----
+
+// KindAutoExecuted marks a fill that no human approved: paper training. Never
+// approval.accepted — the journal must keep the two periods apart.
+const KindAutoExecuted = "order.auto_executed"
+
+// ErrAutoExecute refuses auto-execution outside its narrow lane.
+var ErrAutoExecute = errors.New("auto-execution is paper-only and for the rules' own suggestions")
+
+// AutoExecute fills a pending RULES suggestion in the paper book without an
+// approval — the operator's paper-training mode (ADR 0005, set by the
+// operator via TULIP_AUTOEXECUTE=paper). Only the loop calls it: there is no
+// HTTP route or MCP tool, and suggestions from any other source (brain,
+// claude-code) are refused, so a proposal can never approve itself. Same
+// single-use claim and execution checks as Approve; never in co-pilot mode.
+func (d *Desk) AutoExecute(ctx context.Context, id string) (*portfolio.Fill, error) {
+	if !d.AutoPaper || d.CoPilot() {
+		return nil, ErrAutoExecute
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s, err := d.pending(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if s.Source != "rules" {
+		return nil, ErrAutoExecute
+	}
+	now := d.now()
+	if open, _ := calendar.IsOpen(now); !open {
+		return nil, ErrMarketClosed
+	}
+	if err := d.J.ClaimApproval(ctx, id); err != nil {
+		return nil, err
+	}
+	_, _ = d.J.Append(ctx, KindAutoExecuted, "", map[string]string{"id": id, "by": "paper-training"})
+	return d.execute(ctx, s, now)
 }
 
 // ---- benchmark + marks (no human involved: accounting, not trading) ----

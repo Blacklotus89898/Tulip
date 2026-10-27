@@ -68,6 +68,22 @@ func main() {
 		logger.Error("mode must be paper or copilot", "mode", *mode)
 		os.Exit(2)
 	}
+	// Paper training (ADR 0005): the operator lets the rules' suggestions
+	// fill the paper book without approval. Only the exact value "paper"
+	// enables it, and never outside paper mode.
+	autoPaper := false
+	switch v := os.Getenv("TULIP_AUTOEXECUTE"); v {
+	case "", "off":
+	case "paper":
+		if *mode != "paper" {
+			logger.Error("TULIP_AUTOEXECUTE=paper is only allowed in paper mode", "mode", *mode)
+			os.Exit(2)
+		}
+		autoPaper = true
+	default:
+		logger.Error("TULIP_AUTOEXECUTE must be empty, off or paper", "value", v)
+		os.Exit(2)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -110,7 +126,7 @@ func main() {
 	d := &desk.Desk{
 		J: j, MD: md, Broker: broker.Paper{SlippageBps: 10},
 		Cfg:            desk.Config{Thorn: thornCfg},
-		PassphraseHash: passHash, Limiter: &approval.Limiter{},
+		PassphraseHash: passHash, Limiter: &approval.Limiter{}, AutoPaper: autoPaper,
 	}
 	var acct *questradeAccount
 	if *mode == "copilot" {
@@ -169,6 +185,7 @@ func main() {
 	_, _ = j.Append(ctx, "service.started", "", map[string]any{
 		"version": version, "mode": *mode, "symbols": lp.Symbols, "thorn": thornCfg, "strategy": lp.StrategyName(),
 		"approvals_enabled": passHash != "", "notify": pager.URL != "", "brain": lp.Brain != nil,
+		"auto_execute": autoPaper,
 	})
 	go lp.Run(ctx)
 	if acct != nil {
@@ -200,7 +217,7 @@ func main() {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	logger.Info("tulip listening", "addr", *addr, "db", *dbPath, "mode", *mode, "strategy", lp.StrategyName(), "version", version,
-		"mcp", token != "", "approvals", passHash != "", "notify", pager.URL != "")
+		"mcp", token != "", "approvals", passHash != "", "auto_execute", autoPaper, "notify", pager.URL != "")
 
 	select {
 	case <-ctx.Done():

@@ -258,3 +258,57 @@ func TestScorecardPushedOncePerMonth(t *testing.T) {
 		t.Errorf("pushes = %v, want exactly one for November", titles)
 	}
 }
+
+// Paper training (ADR 0005): the month's rebalance fills in one cycle — sells
+// first, then buys re-planned from the cash the sells freed — with nothing
+// left pending and no approval journaled.
+func TestPaperTrainingRebalanceFillsWithoutApproval(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 2, 11, 0, 0, 0, calendar.Toronto)
+	l, d := harness(t, &now)
+	d.AutoPaper = true
+	// Seed a holding the trend filter wants gone: XEF is in a downtrend.
+	q, _ := l.MD.Quote(ctx, "XEF.TO")
+	f, err := d.Broker.Fill(portfolio.Strategy, "buy", "XEF.TO", 100, q, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.J.Append(ctx, portfolio.KindFill, "", f); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := l.Cycle(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := d.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := st.Books[portfolio.Strategy]
+	if len(st.Pending) != 0 || b.Held("XEF.TO") != 0 {
+		t.Fatalf("pending=%d XEF=%d, want everything filled and XEF sold", len(st.Pending), b.Held("XEF.TO"))
+	}
+	for _, s := range []string{"VFV.TO", "XIU.TO", "ZAG.TO"} {
+		if b.Held(s) == 0 {
+			t.Errorf("%s not bought in the same cycle", s)
+		}
+	}
+	// The buys were sized with the sale's cash: little is left over.
+	if b.Cash > 0.05*10000 {
+		t.Errorf("cash left %.0f — buys not re-planned after the sell", b.Cash)
+	}
+	if evs, _ := d.J.ByKinds(ctx, desk.KindApprovalAccepted); len(evs) != 0 {
+		t.Errorf("no human approval may be journaled, got %d", len(evs))
+	}
+	if evs, _ := d.J.ByKinds(ctx, desk.KindAutoExecuted); len(evs) != 4 {
+		t.Errorf("auto-executed %d orders, want 4 (1 sell + 3 buys)", len(evs))
+	}
+	// Next cycle closes the month.
+	now = now.Add(4 * time.Hour)
+	if _, err := l.Cycle(ctx, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if done, _ := l.monthDone(ctx, "2026-11"); !done {
+		t.Error("month not closed after everything filled")
+	}
+}

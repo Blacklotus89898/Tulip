@@ -36,26 +36,40 @@ const rebalanceWindow = 5
 // sell is pending, so they can use its cash), never a second suggestion for a
 // symbol that already has one pending. Idempotent: safe at every cycle; the
 // month is closed (rebalance.done) once nothing is left to do.
+//
+// In paper training (ADR 0005) the rules' suggestions fill at once; after
+// sells fill, the cycle re-plans once so the buys are sized from the book
+// the sells left behind.
 func (l *Loop) rebalance(ctx context.Context, cycle string, hist HistorySource, res *Result) error {
+	sold, err := l.rebalanceOnce(ctx, cycle, hist, res)
+	if err != nil || !sold {
+		return err
+	}
+	_, err = l.rebalanceOnce(ctx, cycle, hist, res)
+	return err
+}
+
+// rebalanceOnce is one planning pass; sold reports that a sell auto-filled.
+func (l *Loop) rebalanceOnce(ctx context.Context, cycle string, hist HistorySource, res *Result) (sold bool, err error) {
 	j := l.Desk.J
 	now := l.now().In(calendar.Toronto)
 	month := now.Format("2006-01")
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, calendar.Toronto)
 
 	if done, err := l.monthDone(ctx, month); err != nil || done {
-		return err
+		return false, err
 	}
 	n, err := tradingDaysSince(monthStart, now)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if n > rebalanceWindow {
-		return nil // window passed; next month
+		return false, nil // window passed; next month
 	}
 
 	p, err := l.plan(ctx, cycle, hist, monthStart, res)
 	if err != nil || p == nil {
-		return err
+		return false, err
 	}
 	targets, asOf, sells, buys := p.Targets, p.AsOf, p.Sells, p.Buys
 	_, _ = j.Append(ctx, KindTargets, cycle, map[string]any{"strategy": l.Allocator.Name(), "month": month,
@@ -63,7 +77,7 @@ func (l *Loop) rebalance(ctx context.Context, cycle string, hist HistorySource, 
 
 	st, err := l.Desk.LoadState(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	pending := map[string]string{}
 	for _, s := range st.Pending {
@@ -71,7 +85,7 @@ func (l *Loop) rebalance(ctx context.Context, cycle string, hist HistorySource, 
 	}
 	if len(sells) == 0 && len(buys) == 0 && len(pending) == 0 {
 		_, err := j.Append(ctx, KindRebalanceDone, cycle, map[string]any{"month": month, "strategy": l.Allocator.Name(), "targets": targets})
-		return err
+		return false, err
 	}
 
 	propose := func(o strategy.Order) {
@@ -92,20 +106,36 @@ func (l *Loop) rebalance(ctx context.Context, cycle string, hist HistorySource, 
 		default:
 			res.Suggestions = append(res.Suggestions, s.ID)
 			pending[o.Symbol] = side
+			if !l.Desk.AutoPaper {
+				return
+			}
+			// Paper training (ADR 0005): fill now. A failed execution is
+			// journaled (order.rejected) and closes the suggestion either way.
+			if _, err := l.Desk.AutoExecute(ctx, s.ID); err != nil {
+				_, _ = j.Append(ctx, "autoexecute.error", cycle, map[string]string{"id": s.ID, "symbol": o.Symbol, "error": err.Error()})
+				return
+			}
+			delete(pending, o.Symbol)
+			if side == "sell" {
+				sold = true
+			}
 		}
 	}
 	for _, o := range sells {
 		propose(o)
 	}
+	if sold {
+		return true, nil // re-plan the buys from the book the sells left
+	}
 	for _, side := range pending {
 		if side == "sell" {
-			return nil // buys wait for the sells' cash
+			return false, nil // buys wait for the sells' cash
 		}
 	}
 	for _, o := range buys {
 		propose(o)
 	}
-	return nil
+	return false, nil
 }
 
 // Plan is what the allocator wants now and the orders that get there.
