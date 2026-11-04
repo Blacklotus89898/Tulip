@@ -1,0 +1,75 @@
+# Monthly re-run of the pre-registered allocator comparison (docs/backtests),
+# run by Petal (Homelab: services/petal/repos-configmap.yaml, schedule
+# tulip-backtest-monthly). Same command as the dated reports in docs/backtests,
+# on fresh Yahoo history, so drift in the live strategy's case shows up without
+# anyone remembering to look. Read-only: no journal, no broker, no secrets —
+# the binary's `backtest` subcommand never touches the live book.
+#
+# DAG: build once → both universes in parallel → one summary (the run output).
+name: backtest
+description: Pre-registered allocators vs the live strategy, 4-ETF (2014→) and XIU+XBB (2001→), after $4.95 commissions
+max_parallel: 2
+timeout: 30m
+
+params:
+  commission:
+    default: "4.95"
+
+steps:
+  - name: build
+    image: golang:1.25-alpine # = Dockerfile's builder; go.mod says go 1.25
+    needs: []
+    timeout: 10m
+    run: |
+      CGO_ENABLED=0 go build -trimpath -o bin/tulip .
+      ./bin/tulip backtest -h 2>&1 | head -3 || true
+      mkdir -p reports
+
+  - name: compare-4etf
+    image: golang:1.25-alpine # has CA certs for the Yahoo fetch
+    needs: [build]
+    timeout: 5m
+    run: |
+      ./bin/tulip backtest -compare -commission-alt "$PARAM_COMMISSION" \
+        -cache data/history-4etf | tee reports/4etf.txt
+
+  - name: compare-xiu-xbb
+    image: golang:1.25-alpine
+    needs: [build]
+    timeout: 5m
+    # The 25-year universe: the only one that saw 2008 (docs/backtests).
+    run: |
+      ./bin/tulip backtest -compare -symbols XIU.TO,XBB.TO -commission-alt "$PARAM_COMMISSION" \
+        -cache data/history-xiu-xbb | tee reports/xiu-xbb.txt
+
+  - name: summary
+    image: alpine:3.21
+    needs: [compare-4etf, compare-xiu-xbb]
+    timeout: 2m
+    # The after-commission table of each universe (the decision-relevant one),
+    # live strategy + benchmarks only. Fails loudly if a table went missing,
+    # so a silently broken backtest can't pass.
+    run: |
+      pick() {
+        awk -v c="commission $PARAM_COMMISSION per order" '
+          index($0, c) { on = 1; print; next }
+          on && /^period/ { print; exit }
+          on && (/candidate/ || /trend-filter-200/ || /benchmark/) { print }' "$1"
+      }
+      {
+        echo "Tulip monthly backtest - $(date -u +%Y-%m-%d) - run $PETAL_RUN_ID"
+        echo
+        echo "## 4-ETF universe (XIU, VFV, XEF, ZAG)"
+        pick reports/4etf.txt
+        echo
+        echo "## XIU + XBB, 25 years (through 2008)"
+        pick reports/xiu-xbb.txt
+      } > reports/summary.txt
+      cat reports/summary.txt
+      for f in 4etf xiu-xbb; do
+        grep -q "trend-filter-200" reports/$f.txt || { echo "no trend-filter-200 row in $f - backtest output changed?"; exit 1; }
+      done
+      [ "$(grep -c '^period' reports/summary.txt)" = 2 ] || { echo "summary is missing a table"; exit 1; }
+
+outputs:
+  summary: reports/summary.txt
