@@ -29,7 +29,9 @@ steps:
     image: golang:1.25-alpine # has CA certs for the Yahoo fetch
     needs: [build]
     timeout: 5m
+    # pipefail: without it `| tee` reports tee's exit and a failed fetch "passes".
     run: |
+      set -o pipefail
       ./bin/tulip backtest -compare -commission-alt "$PARAM_COMMISSION" \
         -cache data/history-4etf | tee reports/4etf.txt
 
@@ -39,6 +41,7 @@ steps:
     timeout: 5m
     # The 25-year universe: the only one that saw 2008 (docs/backtests).
     run: |
+      set -o pipefail
       ./bin/tulip backtest -compare -symbols XIU.TO,XBB.TO -commission-alt "$PARAM_COMMISSION" \
         -cache data/history-xiu-xbb | tee reports/xiu-xbb.txt
 
