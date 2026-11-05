@@ -16,21 +16,28 @@ moves without a thumbs-up** delivered to your phone.
 
 ```mermaid
 flowchart TD
-  T([ticker: 10:05 / 15:00 Toronto]) --> L
-  subgraph Tulip["Tulip — one Go service"]
-    L[loop<br/>wake on schedule] --> O[observe<br/>portfolio + watchlist]
-    O --> R[rules + Claude<br/>targets / proposals]
-    R --> TH{{Thorn<br/>allowlist · caps · loss limit ·<br/>confidence floor · kill switch}}
-    TH -->|pass| S[suggestion<br/>pending, 30-min TTL]
-    TH -->|no| J
-    S --> X[execute<br/>broker interface]
-    X --> J[(journal<br/>append-only SQLite)]
-    S --> J
-    M[mcp<br/>supervision surface] -.->|reads| J
+  T(["ticker: 10:05 and 15:00 Toronto"])
+  subgraph Tulip["Tulip, one Go service"]
+    J[("journal<br/>append-only SQLite")]
+    L["loop<br/>wake on schedule"]
+    O["observe<br/>portfolio + watchlist"]
+    R["rules + Claude<br/>targets and proposals"]
+    TH{{"Thorn<br/>allowlist, caps, loss limit,<br/>confidence floor, kill switch"}}
+    S["suggestion<br/>pending, 30-min TTL"]
+    X["execute<br/>broker interface"]
+    M["mcp<br/>supervision surface"]
   end
-  S -->|ntfy| P([your phone:<br/>Approve / Decline])
+  P(["your phone<br/>Approve or Decline"])
+  CC(["Claude Code"])
+  T --> L --> O --> R --> TH
+  TH -->|pass| S
+  TH -->|no| J
+  S -->|ntfy| P
   P -->|passphrase| X
-  CC([Claude Code]) -.->|MCP| M
+  S --> J
+  X --> J
+  M -.->|reads| J
+  CC -.->|MCP| M
 ```
 
 The model **never** touches a broker: Claude returns proposals, Thorn (plain
