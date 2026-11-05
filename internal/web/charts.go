@@ -179,7 +179,7 @@ func pipeline(c map[string]int64) []Step {
 		{"approved", "You approved", c["approval.accepted"], "passphrase on the approval page"},
 		{"auto", "Paper training filled", c["order.auto_executed"], "rules suggestions only, paper book (ADR 0005)"},
 		{"declined", "Declined", c["suggestion.declined"], ""},
-		{"expired", "Expired unanswered", c["suggestion.expired"], "15-minute TTL"},
+		{"expired", "Expired unanswered", c["suggestion.expired"], "30-minute TTL (co-pilot: the close)"},
 		{"thorn-execute", "Thorn said no (execute)", c["order.rejected"], "re-checked at fill time"},
 		{"filled", "Paper fills", c["order.filled"], "journaled"},
 	}
