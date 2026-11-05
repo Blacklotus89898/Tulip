@@ -7,9 +7,9 @@ name: Build and Push Tulip Image
 on:
   push:
     branches: [main]
-    paths: ['Dockerfile', 'go.mod', 'go.sum', '**.go', '.github/workflows/build-image.yaml']
+    paths: ['Dockerfile', 'go.mod', 'go.sum', '**.go', '**.html', '.github/workflows/build-image.yaml']
   pull_request:
-    paths: ['Dockerfile', 'go.mod', 'go.sum', '**.go', '.github/workflows/build-image.yaml']
+    paths: ['Dockerfile', 'go.mod', 'go.sum', '**.go', '**.html', '.github/workflows/build-image.yaml']
   workflow_dispatch:
 
 jobs:

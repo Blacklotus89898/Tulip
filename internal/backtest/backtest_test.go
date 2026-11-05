@@ -167,3 +167,25 @@ func upThenDown2(i int) float64 {
 	}
 	return 69 - 0.08*float64(i-380)
 }
+
+func TestCurvesSampleTheRunForCharts(t *testing.T) {
+	up := series(600, func(i int) float64 { return 50 + 0.02*float64(i) })
+	bars := map[string][]marketdata.Candle{"AAA.TO": up, "XIU.TO": series(600, func(i int) float64 { return 40 + 0.01*float64(i) })}
+	syms := []string{"AAA.TO", "XIU.TO"}
+	res, err := RunAllocator(bars, syms, strategy.EqualWeight{Symbols: syms}, relaxed(syms...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Curve) < 2 || len(res.Curve) != len(res.BenchCurve) {
+		t.Fatalf("curve %d points, bench %d", len(res.Curve), len(res.BenchCurve))
+	}
+	if res.Curve[0].Day != res.Start || res.Curve[len(res.Curve)-1].Day != res.End {
+		t.Errorf("curve spans %s..%s, run %s..%s", res.Curve[0].Day, res.Curve[len(res.Curve)-1].Day, res.Start, res.End)
+	}
+	if last := res.Curve[len(res.Curve)-1].Equity; math.Abs(last-res.FinalEquity) > 0.01 {
+		t.Errorf("curve ends at %.2f, final equity %.2f", last, res.FinalEquity)
+	}
+	if res.HoldoutStart <= res.Start || res.HoldoutStart >= res.End {
+		t.Errorf("holdout start %s outside the run", res.HoldoutStart)
+	}
+}

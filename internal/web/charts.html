@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tulip charts</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --sunk: #f1f1ee; --ink: #1f2328; --muted: #646b75; --line: #dcdcd6; --grid: #ececE6;
+  --pos: #1f7a3f; --neg: #c0392b; --hold: #f6e7ee; --focus: #b8336a;
+  --c0: #b8336a; --c1: #7d8590; --c2: #2f6fdf; --c3: #d9822b; --c4: #2e9e6a; --c5: #8b5cf6; --c6: #0f9bb0;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121316; --panel: #1b1d22; --sunk: #16181c; --ink: #e8e6e3; --muted: #9aa1ab; --line: #30333a; --grid: #26292f;
+    --pos: #4cc184; --neg: #f07167; --hold: #3a2230; --focus: #f06fa3;
+    --c0: #f06fa3; --c1: #9aa1ab; --c2: #6d9cf5; --c3: #f0a050; --c4: #4cc184; --c5: #a68cf0; --c6: #3cc6db;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 16px; display: flex; flex-wrap: wrap;
+  gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+h1 { font-size: 18px; margin: 0; }
+nav a { color: var(--focus); text-decoration: none; margin-right: 12px; font-size: 13px; }
+.meta { color: var(--muted); font-size: 12px; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+h2 { font-size: 16px; margin: 0 0 2px; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+.note { background: var(--sunk); border-radius: 8px; padding: 8px 10px; color: var(--muted); font-size: 12.5px; margin: 8px 0; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .ax { fill: var(--muted); font-size: 11px; }
+.chart .gl { stroke: var(--grid); stroke-width: 1; }
+.chart .zero { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.chart .hold { fill: var(--hold); }
+.chart .holdlbl { fill: var(--muted); font-size: 11px; }
+.chart .xh { stroke: var(--muted); stroke-width: 1; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); white-space: nowrap; display: none; z-index: 2; }
+.tip b { display: block; margin-bottom: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 2px; font-size: 12.5px; }
+.legend button { background: none; border: 0; color: var(--ink); font: inherit; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; padding: 2px 0; }
+.legend button[aria-pressed="false"] { opacity: .35; }
+.sw { width: 18px; height: 3px; border-radius: 2px; display: inline-block; }
+.sw.dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px) !important; height: 2px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.tablewrap { overflow-x: auto; }
+.pos { color: var(--pos); } .neg { color: var(--neg); }
+.badge { font-size: 11px; border-radius: 999px; padding: 1px 8px; background: var(--focus); color: #fff; margin-left: 6px; vertical-align: 2px; }
+
+/* strategy flow diagrams */
+.strats { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr)); gap: 12px; }
+.strat { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--sunk); }
+.strat.live { border-color: var(--focus); }
+.strat h3 { margin: 0; font-size: 14px; }
+.strat .rule { color: var(--muted); font-size: 12.5px; margin: 2px 0 10px; }
+.flow { position: relative; display: grid; grid-template-columns: minmax(70px, auto) minmax(90px, 1fr) minmax(110px, 1.2fr); column-gap: 26px; row-gap: 6px; align-items: center; }
+.flow svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.flow svg.wires path { fill: none; stroke: var(--muted); stroke-width: 1.3; opacity: .6; }
+.flow svg.wires path.on { stroke: var(--focus); opacity: .9; stroke-width: 1.8; }
+.sym { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; font-weight: 600; font-size: 12.5px; text-align: center; z-index: 1; }
+.sym.safe { border-style: dashed; }
+.sym small { display: block; font-weight: 400; color: var(--muted); font-size: 10.5px; }
+.test { grid-column: 2; background: var(--panel); border: 1.5px solid var(--focus); border-radius: 10px; padding: 8px; text-align: center;
+  font-size: 12.5px; align-self: stretch; display: flex; align-items: center; justify-content: center; z-index: 1; }
+.out { z-index: 1; cursor: help; }
+.out .bar { height: 16px; border-radius: 4px; background: var(--line); position: relative; overflow: hidden; }
+.out .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--focus); border-radius: 4px; }
+.out .w { font-size: 12px; font-weight: 600; }
+.out .why { font-size: 11.5px; color: var(--muted); display: none; margin-top: 2px; white-space: normal; }
+.strat.open .out .why { display: block; }
+.strat .more { background: none; border: 0; color: var(--focus); cursor: pointer; font: inherit; font-size: 12px; padding: 6px 0 0; }
+.stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-top: 10px; border: 1px solid var(--line); }
+.stack i { display: block; height: 100%; }
+
+/* pipeline */
+.pipe { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 4px; overflow-x: auto; padding-bottom: 4px; }
+.stage { display: flex; flex-direction: column; gap: 6px; }
+.node { background: var(--sunk); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; width: 148px; }
+.node.main { border-color: var(--focus); background: var(--panel); }
+.node.exit { border-style: dashed; font-size: 12.5px; }
+.node .n { font-size: 20px; font-weight: 700; }
+.node .l { font-size: 12.5px; font-weight: 600; }
+.node .d { font-size: 11px; color: var(--muted); }
+.arrow { align-self: flex-start; margin-top: 22px; color: var(--muted); font-size: 20px; padding: 0 1px; }
+@media (max-width: 640px) {
+  main { padding: 10px; } section { padding: 12px; }
+  .pipe { flex-direction: column; overflow-x: visible; } .stage { flex-direction: row; flex-wrap: wrap; } .node { width: auto; flex: 1 1 140px; }
+  .arrow { transform: rotate(90deg); margin: 0 0 0 40px; }
+  .flow { column-gap: 16px; grid-template-columns: minmax(60px, auto) minmax(70px, .8fr) minmax(90px, 1.2fr); }
+}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>🌷 Tulip charts</h1><div class="meta" id="meta">loading…</div></div>
+  <nav><a href="scorecard">Scorecard (tables)</a><a href="#books">Books</a><a href="#backtest">Backtest</a><a href="#strategies">Strategies</a><a href="#pipeline">Pipeline</a></nav>
+</header>
+<main>
+  <section id="books">
+    <h2>Your books since the common start</h2>
+    <p class="sub" id="booksSub">Value of every book, indexed to 100 on the first shadow rebalance — the same marks the scorecard measures.</p>
+    <div class="chart" id="booksChart"></div>
+    <div class="legend" id="booksLegend"></div>
+    <h2 style="margin-top:14px;font-size:14px">Drop from each book's peak</h2>
+    <div class="chart" id="ddChart"></div>
+    <div class="note">Under 12 months, differences between books are noise — the promotion rule (ADR 0004) needs 12 months and the backtest gate.</div>
+  </section>
+  <section id="backtest">
+    <h2>Backtest: growth of $10,000</h2>
+    <p class="sub" id="btSub">Pre-registered strategies on one common start.</p>
+    <div class="chart" id="btChart"></div>
+    <div class="legend" id="btLegend"></div>
+    <div class="tablewrap"><table id="btTable"></table></div>
+    <div class="note" id="btNote">Production strategy code, dividend-adjusted daily history, fills at the next day's open with slippage and commission, every order through Thorn. The shaded final 30% was held out: the candidates were chosen before seeing it.</div>
+  </section>
+  <section id="strategies">
+    <h2>How each strategy decides — today</h2>
+    <p class="sub" id="stSub">Each ETF goes through the strategy's rule; the right column is the weight it would hold now. Tap a card for the full reasons.</p>
+    <div class="strats" id="strats"></div>
+  </section>
+  <section id="pipeline">
+    <h2>Decision pipeline</h2>
+    <p class="sub">Rules propose, Claude reviews, Thorn guards, you decide, the journal remembers. Counts are every event in the journal so far.</p>
+    <div class="pipe" id="pipe"></div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var NS = "http://www.w3.org/2000/svg";
+  var COLORS = ["--c0", "--c1", "--c2", "--c3", "--c4", "--c5", "--c6"];
+  var css = getComputedStyle(document.documentElement);
+  function color(i) { return css.getPropertyValue(COLORS[i % COLORS.length]).trim(); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function sv(tag, attrs) { var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; }
+  function pct(x, d) { return (x >= 0 ? "+" : "") + (x * 100).toFixed(d == null ? 1 : d) + "%"; }
+  function money(x) { return "$" + Math.round(x).toLocaleString(); }
+  function short(s) { return s.replace(/\.TO$/, ""); }
+  function bookLabel(b, live) {
+    if (b.role === "live") return "your paper book";
+    if (b.role === "benchmark") return "XIU buy & hold";
+    var n = b.book.replace(/^shadow:/, "");
+    return n + (n === live ? " (live strategy)" : "");
+  }
+
+  // ---------- generic line chart: series [{name, color, dash, width, pts:[{t, y}]}] ----------
+  function lineChart(host, series, opt) {
+    host.textContent = "";
+    // Draw at the real width so axis text stays 11px on a phone.
+    var W = Math.max(320, Math.round(host.clientWidth || 900)), H = Math.round((opt.height || 300) * (W < 600 ? 0.8 : 1)), L = 54, R = 14, T = 12, B = 26;
+    var vis = series.filter(function (s) { return s.on !== false && s.pts.length; });
+    if (!vis.length) { host.appendChild(el("div", "note", opt.empty || "No data yet.")); return; }
+    var t0 = Infinity, t1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    vis.forEach(function (s) { s.pts.forEach(function (p) {
+      t0 = Math.min(t0, p.t); t1 = Math.max(t1, p.t); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+    }); });
+    if (opt.zero != null) { y0 = Math.min(y0, opt.zero); y1 = Math.max(y1, opt.zero); }
+    if (y1 === y0) { y1 += 1; y0 -= 1; }
+    var pad = (y1 - y0) * 0.06; y0 -= pad; y1 += pad;
+    if (t1 === t0) { t0 -= 864e5; t1 += 864e5; }
+    var log = opt.log && y0 > 0;
+    var fy = log ? function (v) { return Math.log(v); } : function (v) { return v; };
+    var X = function (t) { return L + (t - t0) / (t1 - t0) * (W - L - R); };
+    var Y = function (v) { return T + (fy(y1) - fy(v)) / (fy(y1) - fy(y0)) * (H - T - B); };
+    var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": opt.label || "chart" });
+    if (opt.shadeFrom) {
+      var sx = X(opt.shadeFrom);
+      svg.appendChild(sv("rect", { x: sx, y: T, width: Math.max(0, W - R - sx), height: H - T - B, "class": "hold" }));
+      var tl = sv("text", { x: sx + 6, y: T + 14, "class": "holdlbl" }); tl.textContent = "held out"; svg.appendChild(tl);
+    }
+    // y grid
+    var ticks = niceTicks(y0, y1, 5, log);
+    ticks.forEach(function (v) {
+      var y = Y(v);
+      svg.appendChild(sv("line", { x1: L, x2: W - R, y1: y, y2: y, "class": "gl" }));
+      var tx = sv("text", { x: L - 6, y: y + 4, "text-anchor": "end", "class": "ax" }); tx.textContent = opt.fmtY(v); svg.appendChild(tx);
+    });
+    if (opt.zero != null) svg.appendChild(sv("line", { x1: L, x2: W - R, y1: Y(opt.zero), y2: Y(opt.zero), "class": "zero" }));
+    // x ticks
+    timeTicks(t0, t1).forEach(function (t) {
+      var tx = sv("text", { x: X(t.t), y: H - 6, "text-anchor": "middle", "class": "ax" }); tx.textContent = t.label; svg.appendChild(tx);
+    });
+    vis.forEach(function (s) {
+      var d = s.pts.map(function (p, i) { return (i ? "L" : "M") + X(p.t).toFixed(1) + "," + Y(p.y).toFixed(1); }).join("");
+      svg.appendChild(sv("path", { d: d, fill: "none", stroke: s.color, "stroke-width": s.width || 1.8,
+        "stroke-dasharray": s.dash ? "5 4" : "", "stroke-linejoin": "round" }));
+      if (s.pts.length < 30) s.pts.forEach(function (p) { svg.appendChild(sv("circle", { cx: X(p.t), cy: Y(p.y), r: 3, fill: s.color })); });
+    });
+    var xh = sv("line", { y1: T, y2: H - B, "class": "xh", visibility: "hidden" }); svg.appendChild(xh);
+    host.appendChild(svg);
+    var tip = el("div", "tip"); host.appendChild(tip);
+    var all = []; vis.forEach(function (s) { s.pts.forEach(function (p) { all.push(p.t); }); });
+    all = all.filter(function (t, i, a) { return a.indexOf(t) === i; }).sort(function (a, b) { return a - b; });
+    function move(ev) {
+      var r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) / r.width * W;
+      var t = t0 + (x - L) / (W - L - R) * (t1 - t0), best = all[0];
+      all.forEach(function (a) { if (Math.abs(a - t) < Math.abs(best - t)) best = a; });
+      xh.setAttribute("x1", X(best)); xh.setAttribute("x2", X(best)); xh.setAttribute("visibility", "visible");
+      tip.textContent = "";
+      tip.appendChild(el("b", null, new Date(best).toISOString().slice(0, 10)));
+      vis.map(function (s) {
+        var p = null; s.pts.forEach(function (q) { if (q.t <= best) p = q; });
+        return { s: s, p: p };
+      }).filter(function (x) { return x.p; }).sort(function (a, b) { return b.p.y - a.p.y; }).forEach(function (x) {
+        var row = el("div"); var sw = el("span", "sw"); sw.style.background = x.s.color; sw.style.marginRight = "6px";
+        row.appendChild(sw); row.appendChild(document.createTextNode(x.s.name + "  " + opt.fmtTip(x.p.y))); tip.appendChild(row);
+      });
+      tip.style.display = "block";
+      var px = (X(best) / W) * r.width, w = tip.offsetWidth;
+      tip.style.left = Math.max(0, Math.min(r.width - w, px + 12 > r.width - w ? px - w - 12 : px + 12)) + "px";
+      tip.style.top = "8px";
+    }
+    svg.addEventListener("mousemove", move);
+    svg.addEventListener("touchstart", function (e) { move(e.touches[0]); }, { passive: true });
+    svg.addEventListener("touchmove", function (e) { move(e.touches[0]); }, { passive: true });
+    svg.addEventListener("mouseleave", function () { tip.style.display = "none"; xh.setAttribute("visibility", "hidden"); });
+  }
+  function niceTicks(a, b, n, log) {
+    if (log) {
+      var out = [], lo = Math.floor(Math.log10(a)), hi = Math.ceil(Math.log10(b));
+      for (var e = lo; e <= hi; e++) [1, 2, 5].forEach(function (m) { var v = m * Math.pow(10, e); if (v >= a && v <= b) out.push(v); });
+      return out.length >= 2 ? out : [a, b];
+    }
+    var step = Math.pow(10, Math.floor(Math.log10((b - a) / n)));
+    [1, 2, 2.5, 5, 10].some(function (m) { if ((b - a) / (step * m) <= n) { step *= m; return true; } return false; });
+    var ts = []; for (var v = Math.ceil(a / step) * step; v <= b + 1e-9; v += step) ts.push(+v.toFixed(10));
+    return ts;
+  }
+  function timeTicks(t0, t1) {
+    var days = (t1 - t0) / 864e5, out = [], d = new Date(t0);
+    if (days > 900) {
+      var step = days > 4000 ? 2 : 1;
+      for (var y = d.getUTCFullYear() + 1; ; y += step) { var t = Date.UTC(y, 0, 1); if (t > t1) break; out.push({ t: t, label: String(y) }); }
+    } else if (days > 60) {
+      for (var m = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)); m.getTime() <= t1; m.setUTCMonth(m.getUTCMonth() + (days > 400 ? 3 : 1)))
+        out.push({ t: m.getTime(), label: m.toISOString().slice(0, 7) });
+    } else {
+      var stepD = Math.max(1, Math.round(days / 6));
+      for (var t2 = t0; t2 <= t1; t2 += stepD * 864e5) out.push({ t: t2, label: new Date(t2).toISOString().slice(5, 10) });
+    }
+    return out;
+  }
+  function T(day) { return Date.parse(day + "T00:00:00Z"); }
+
+  function legend(host, series, redraw) {
+    host.textContent = "";
+    series.forEach(function (s) {
+      var b = el("button"); b.type = "button"; b.setAttribute("aria-pressed", s.on === false ? "false" : "true");
+      var sw = el("span", "sw" + (s.dash ? " dash" : "")); sw.style.background = s.color; sw.style.color = s.color;
+      b.appendChild(sw); b.appendChild(document.createTextNode(s.name));
+      b.addEventListener("click", function () { s.on = s.on === false; b.setAttribute("aria-pressed", s.on ? "true" : "false"); redraw(); });
+      host.appendChild(b);
+    });
+  }
+
+  // ---------- sections ----------
+  function books(d) {
+    var host = document.getElementById("booksChart"), dd = document.getElementById("ddChart");
+    if (!d.books || !d.books.length) {
+      host.textContent = ""; host.appendChild(el("div", "note", d.note || "No shadow rebalance yet."));
+      dd.textContent = ""; return;
+    }
+    document.getElementById("booksSub").textContent = "Value of every book, indexed to 100 on " + d.since +
+      " (the first shadow rebalance) — the same marks the scorecard measures. " + d.books[0].points.length + " trading days so far.";
+    var ci = 2;
+    var series = d.books.map(function (b) {
+      var base = b.points.length ? b.points[0].equity : 1;
+      var c = b.role === "live" ? color(0) : b.role === "benchmark" ? color(1) : color(ci++);
+      var isLive = b.role === "live" || b.book === "shadow:" + d.live;
+      return { name: bookLabel(b, d.live), color: c, dash: b.role === "benchmark", width: isLive ? 2.8 : 1.6,
+        pts: b.points.map(function (p) { return { t: T(p.day), y: p.equity / base * 100 }; }),
+        raw: b.points };
+    });
+    function draw() {
+      lineChart(host, series, { label: "book values", fmtY: function (v) { return v.toFixed(1); },
+        fmtTip: function (v) { return v.toFixed(2) + " (" + pct(v / 100 - 1, 2) + ")"; }, zero: 100, height: 280 });
+      var ddSeries = series.map(function (s) {
+        var peak = -Infinity;
+        return { name: s.name, color: s.color, dash: s.dash, width: s.width, on: s.on,
+          pts: s.pts.map(function (p) { peak = Math.max(peak, p.y); return { t: p.t, y: p.y / peak - 1 }; }) };
+      });
+      lineChart(dd, ddSeries, { label: "drawdowns", fmtY: function (v) { return (v * 100).toFixed(1) + "%"; },
+        fmtTip: function (v) { return (v * 100).toFixed(2) + "%"; }, zero: 0, height: 150 });
+    }
+    legend(document.getElementById("booksLegend"), series, draw);
+    draw();
+  }
+
+  function backtest(d) {
+    var bt = d.backtest, host = document.getElementById("btChart");
+    if (!bt) {
+      host.textContent = ""; host.appendChild(el("div", "note", d.backtest_note || "Backtest not computed yet."));
+      return;
+    }
+    document.getElementById("btSub").textContent = bt.universe.slice(0, -1).map(short).join(", ") + " with " + short(bt.universe[bt.universe.length - 1]) +
+      " as the safe asset · " + bt.start + " → " + bt.end + " · $" + bt.commission.toFixed(2) + " per order, " + bt.slippage_bps + " bps slippage · log scale.";
+    var runs = bt.runs.slice().sort(function (a, b) { return (b.live ? 1 : 0) - (a.live ? 1 : 0) || a.name.localeCompare(b.name); });
+    var ci = 2;
+    var series = runs.map(function (r) {
+      return { name: r.name + (r.live ? " (live)" : ""), color: r.live ? color(0) : color(ci++), width: r.live ? 2.8 : 1.6,
+        pts: r.curve.map(function (p) { return { t: T(p.day), y: p.equity }; }) };
+    });
+    series.push({ name: "XIU buy & hold", color: color(1), dash: true, width: 1.6,
+      pts: bt.bench.curve.map(function (p) { return { t: T(p.day), y: p.equity }; }) });
+    function draw() {
+      lineChart(host, series, { label: "backtest equity", log: true, shadeFrom: T(bt.holdout_start), height: 320,
+        fmtY: function (v) { return v >= 1000 ? "$" + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "k" : "$" + v.toFixed(0); },
+        fmtTip: money });
+    }
+    legend(document.getElementById("btLegend"), series, draw);
+    draw();
+    var tbl = document.getElementById("btTable"); tbl.textContent = "";
+    var hr = el("tr"); ["strategy", "CAGR", "max drop", "Sharpe", "held-out CAGR", "trades", "$10k became"].forEach(function (h) { hr.appendChild(el("th", null, h)); });
+    tbl.appendChild(hr);
+    runs.concat([Object.assign({ name: "XIU buy & hold" }, bt.bench)]).forEach(function (r) {
+      var tr = el("tr");
+      var name = el("td", null, r.name); if (r.live) name.appendChild(el("span", "badge", "live"));
+      tr.appendChild(name);
+      [[pct(r.cagr), r.cagr], [pct(r.max_drawdown, 0), r.max_drawdown], [r.sharpe.toFixed(2), 0], [pct(r.holdout_cagr), r.holdout_cagr]].forEach(function (c) {
+        tr.appendChild(el("td", c[1] > 0 ? "pos" : c[1] < 0 ? "neg" : "", c[0]));
+      });
+      tr.appendChild(el("td", null, String(r.trades)));
+      tr.appendChild(el("td", null, money(r.curve.length ? r.curve[r.curve.length - 1].equity : 0)));
+      tbl.appendChild(tr);
+    });
+  }
+
+  function strategies(d) {
+    var host = document.getElementById("strats"); host.textContent = "";
+    if (d.as_of) document.getElementById("stSub").textContent = "Prices up to " + d.as_of +
+      ". Each ETF goes through the strategy's rule; the right column is the weight it would hold now. Tap a card for the full reasons.";
+    (d.strategies || []).forEach(function (s) {
+      var card = el("div", "strat" + (s.live ? " live" : ""));
+      var h = el("h3", null, s.name); if (s.live) h.appendChild(el("span", "badge", "live"));
+      card.appendChild(h);
+      card.appendChild(el("div", "rule", s.rule));
+      var flow = el("div", "flow"); var n = s.symbols.length;
+      var wires = sv("svg", { "class": "wires" }); flow.appendChild(wires);
+      var test = el("div", "test", s.test); test.style.gridRow = "1 / span " + n; flow.appendChild(test);
+      var syms = [], outs = [];
+      s.symbols.forEach(function (o, i) {
+        var sym = el("div", "sym" + (o.safe ? " safe" : ""), short(o.symbol));
+        if (o.safe) sym.appendChild(el("small", null, "safe asset"));
+        sym.style.gridColumn = "1"; sym.style.gridRow = String(i + 1); flow.appendChild(sym); syms.push(sym);
+        var out = el("div", "out"); out.style.gridColumn = "3"; out.style.gridRow = String(i + 1);
+        out.title = o.reason;
+        out.appendChild(el("div", "w", Math.round(o.weight * 100) + "%"));
+        var bar = el("div", "bar"), fill = el("i"); fill.style.width = Math.min(100, o.weight * 100) + "%"; fill.style.background = color(i + 2); bar.appendChild(fill); out.appendChild(bar);
+        out.appendChild(el("div", "why", o.reason));
+        flow.appendChild(out); outs.push({ e: out, on: o.weight > 0.0005 });
+      });
+      card.appendChild(flow);
+      var stack = el("div", "stack"); stack.title = "allocation";
+      s.symbols.forEach(function (o, i) { if (o.weight > 0.0005) { var b = el("i"); b.style.width = (o.weight * 100) + "%"; b.style.background = color(i + 2); b.title = short(o.symbol) + " " + Math.round(o.weight * 100) + "%"; stack.appendChild(b); } });
+      card.appendChild(stack);
+      var more = el("button", "more", "show reasons"); more.type = "button";
+      more.addEventListener("click", function () { var o = card.classList.toggle("open"); more.textContent = o ? "hide reasons" : "show reasons"; requestAnimationFrame(function () { wire(flow, wires, test, syms, outs); }); });
+      card.appendChild(more);
+      host.appendChild(card);
+      requestAnimationFrame(function () { wire(flow, wires, test, syms, outs); });
+    });
+  }
+  function wire(flow, svg, test, syms, outs) {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var f = flow.getBoundingClientRect(), t = test.getBoundingClientRect();
+    syms.forEach(function (s, i) {
+      var r = s.getBoundingClientRect(), y = r.top + r.height / 2 - f.top;
+      var x1 = r.right - f.left, x2 = t.left - f.left, ty = t.top + t.height * (i + 0.5) / syms.length - f.top;
+      svg.appendChild(sv("path", { d: "M" + x1 + "," + y + " C" + (x1 + 14) + "," + y + " " + (x2 - 14) + "," + ty + " " + x2 + "," + ty }));
+      var o = outs[i].e.getBoundingClientRect(), oy = o.top + Math.min(o.height / 2, 14) - f.top, ox = o.left - f.left, sx = t.right - f.left;
+      svg.appendChild(sv("path", { d: "M" + sx + "," + ty + " C" + (sx + 14) + "," + ty + " " + (ox - 14) + "," + oy + " " + ox + "," + oy, "class": outs[i].on ? "on" : "" }));
+    });
+  }
+
+  function pipeline(d) {
+    var host = document.getElementById("pipe"); host.textContent = "";
+    var by = {}; (d.pipeline || []).forEach(function (s) { by[s.id] = s; });
+    function node(id, cls) {
+      var s = by[id]; if (!s) return el("span");
+      var n = el("div", "node " + cls);
+      n.appendChild(el("div", "n", String(s.count))); n.appendChild(el("div", "l", s.label));
+      if (s.note) n.appendChild(el("div", "d", s.note));
+      return n;
+    }
+    var stages = [[["rules", "main"]], [["proposed", "main"], ["thorn-propose", "exit"]], [["review", "main"]],
+      [["approved", "main"], ["auto", "main"], ["declined", "exit"], ["expired", "exit"]], [["thorn-execute", "exit"]], [["filled", "main"]]];
+    stages.forEach(function (st, i) {
+      if (i) host.appendChild(el("div", "arrow", "→"));
+      var col = el("div", "stage");
+      st.forEach(function (x) { col.appendChild(node(x[0], x[1])); });
+      host.appendChild(col);
+    });
+  }
+
+  var rt;
+  window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(function () { if (window.__d) render(window.__d); }, 150); });
+  function render(d) {
+    window.__d = d;
+    document.getElementById("meta").textContent = "live strategy: " + d.live + " · read-only · updated " + new Date(d.generated).toLocaleString();
+    books(d); backtest(d); strategies(d); pipeline(d);
+  }
+  fetch("charts.json", { cache: "no-store" }).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || ("HTTP " + r.status)); return j; }); })
+    .then(render).catch(function (e) { document.getElementById("meta").textContent = "could not load: " + e.message; });
+})();
+</script>
+</body>
+</html>

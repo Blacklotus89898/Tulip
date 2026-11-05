@@ -71,8 +71,8 @@ func Build(ctx context.Context, j *journal.Journal) (*Card, error) {
 		}
 		switch e.Kind {
 		case KindRebalanced:
-			if card.Since == "" && len(e.TS) >= 10 {
-				card.Since = e.TS[:10] // UTC date ≈ Toronto date during TSX hours
+			if card.Since == "" {
+				card.Since = startDay(m.Day, e.TS)
 			}
 			targets[m.Book] = m.Targets
 		case KindRejected:
@@ -159,6 +159,19 @@ func Build(ctx context.Context, j *journal.Journal) (*Card, error) {
 	card.Note = "Measured from the common start (first shadow rebalance). Candidates trade instantly at the rebalance cycle's quotes; the live book trades when you approve, so live vs shadow:" +
 		"trend-filter-200 is the cost of approval timing. Differences under ~12 months are noise — the promotion rule (ADR 0004) needs 12 months and the backtest gate."
 	return card, nil
+}
+
+// startDay is the trading day a shadow rebalance happened: its own "day"
+// (recorded since 2026-11-05), else the UTC date of the event, which is the
+// Toronto date during TSX hours.
+func startDay(day, ts string) string {
+	if day != "" {
+		return day
+	}
+	if len(ts) >= 10 {
+		return ts[:10]
+	}
+	return ""
 }
 
 // Summary is the monthly push (ntfy): short — the page has the detail. In
