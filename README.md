@@ -14,19 +14,30 @@ moves without a thumbs-up** delivered to your phone.
 
 ## Architecture
 
-```
-                 ┌──────────────────── Tulip (one Go service) ────────────────────┐
-   ticker ──────►│ loop      wake on schedule (market hours)                      │
-                 │ observe   portfolio + watchlist via marketdata interface       │
-                 │ think     Claude (Anthropic API) → structured proposals        │
-                 │ thorn     deterministic gate: allowlist · caps · loss limit ·  │
-                 │           confidence floor · kill switch      (internal/thorn)│
-                 │ suggest   journal (pending, TTL) ──► ntfy [Approve] [Decline] │
-                 │ execute   human-approved orders via broker interface           │
-                 │ journal   append-only SQLite — every step of every cycle       │
-                 │ mcp       supervision surface: portfolio, journal, decisions,  │
-                 │           kill switch — the desk-side window in                │
-                 └────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+  T(["ticker: 10:05 and 15:00 Toronto"])
+  subgraph Tulip["Tulip, one Go service"]
+    J[("journal<br/>append-only SQLite")]
+    L["loop<br/>wake on schedule"]
+    O["observe<br/>portfolio + watchlist"]
+    R["rules + Claude<br/>targets and proposals"]
+    TH{{"Thorn<br/>allowlist, caps, loss limit,<br/>confidence floor, kill switch"}}
+    S["suggestion<br/>pending, 30-min TTL"]
+    X["execute<br/>broker interface"]
+    M["mcp<br/>supervision surface"]
+  end
+  P(["your phone<br/>Approve or Decline"])
+  CC(["Claude Code"])
+  T --> L --> O --> R --> TH
+  TH -->|pass| S
+  TH -->|no| J
+  S -->|ntfy| P
+  P -->|passphrase| X
+  S --> J
+  X --> J
+  M -.->|reads| J
+  CC -.->|MCP| M
 ```
 
 The model **never** touches a broker: Claude returns proposals, Thorn (plain
@@ -74,7 +85,8 @@ Full reasoning in [ADR 0001](docs/adr/0001-architecture.md).
   promoted.
 - **Claude Code (MCP):** `tulip_status`, `journal_list`, `portfolio`,
   `suggestions_pending`, `propose`, `review_suggestion`, `decline`,
-  `kill_switch_arm`, `cycle_run`, `broker_account` (read-only).
+  `kill_switch_arm`, `cycle_run`, and read-only `broker_account`,
+  `rebalance_preview`, `scorecard`.
   No tool approves, executes or disarms — `tools_test.go` enforces the list.
   **An agent must never read the approval secret, call `/approve` or
   `/killswitch`, or approve on the operator's behalf** (ADR 0002 §3).
