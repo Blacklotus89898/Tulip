@@ -15,7 +15,7 @@ moves without a thumbs-up** delivered to your phone.
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
   T([ticker: 10:05 / 15:00 Toronto]) --> L
   subgraph Tulip["Tulip — one Go service"]
     L[loop<br/>wake on schedule] --> O[observe<br/>portfolio + watchlist]
@@ -26,11 +26,11 @@ flowchart LR
     S --> X[execute<br/>broker interface]
     X --> J[(journal<br/>append-only SQLite)]
     S --> J
-    M[mcp<br/>supervision surface] -.reads.-> J
+    M[mcp<br/>supervision surface] -.->|reads| J
   end
   S -->|ntfy| P([your phone:<br/>Approve / Decline])
   P -->|passphrase| X
-  CC([Claude Code]) -.MCP.-> M
+  CC([Claude Code]) -.->|MCP| M
 ```
 
 The model **never** touches a broker: Claude returns proposals, Thorn (plain
