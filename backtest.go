@@ -15,6 +15,7 @@ import (
 	"github.com/Blacklotus89898/Tulip/internal/marketdata"
 	"github.com/Blacklotus89898/Tulip/internal/strategy"
 	"github.com/Blacklotus89898/Tulip/internal/thorn"
+	"github.com/Blacklotus89898/Tulip/internal/web"
 )
 
 // runBacktest is `tulip backtest`: replay momentum-v1 + Thorn over Yahoo's
@@ -227,4 +228,46 @@ func runCompare(bars map[string][]marketdata.Candle, syms []string, base backtes
 		}
 	}
 	return nil
+}
+
+// chartBacktest is runCompare's allocator half for the /charts page: every
+// pre-registered candidate on one common start (warmup 260 bars), Thorn's
+// caps relaxed exactly as -compare relaxes them, at a real commission.
+func chartBacktest(ctx context.Context, src interface {
+	History(ctx context.Context, symbol string) ([]marketdata.Candle, error)
+}, syms []string, live string, commission float64) (*web.BacktestSet, error) {
+	if len(syms) < 2 {
+		return nil, fmt.Errorf("need risk symbols plus a safe one")
+	}
+	bars := map[string][]marketdata.Candle{}
+	for _, s := range append(append([]string{}, syms...), "XIU.TO") {
+		if _, ok := bars[s]; ok {
+			continue
+		}
+		b, err := src.History(ctx, s)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", s, err)
+		}
+		bars[s] = b
+	}
+	th := thorn.DefaultConfig()
+	th.Allowlist = syms
+	th.MaxOrderValue, th.MaxPositionWeight = 1e12, 1
+	cfg := backtest.Config{Thorn: th, Cash: 10000, SlippageBps: 10, Commission: commission, Warmup: 260}
+	set := &web.BacktestSet{Universe: syms, Commission: commission, SlippageBps: cfg.SlippageBps}
+	for _, a := range strategy.Candidates(syms) {
+		r, err := backtest.RunAllocator(bars, syms, a, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", a.Name(), err)
+		}
+		set.Start, set.End, set.HoldoutStart = r.Start, r.End, r.HoldoutStart
+		set.Runs = append(set.Runs, web.BacktestRun{Name: a.Name(), Live: a.Name() == live, CAGR: r.Strategy.CAGR,
+			MaxDD: r.Strategy.MaxDrawdown, Sharpe: r.Strategy.Sharpe, HoldoutCAGR: r.Holdout["strategy"].CAGR,
+			Trades: r.Trades, Curve: r.Curve})
+		if set.Bench.Curve == nil {
+			set.Bench = web.BacktestRun{Name: "XIU buy & hold", CAGR: r.BenchXIU.CAGR, MaxDD: r.BenchXIU.MaxDrawdown,
+				Sharpe: r.BenchXIU.Sharpe, HoldoutCAGR: r.Holdout["bench_buy_hold"].CAGR, Trades: 1, Curve: r.BenchCurve}
+		}
+	}
+	return set, nil
 }

@@ -212,6 +212,27 @@ func main() {
 		}
 		return &web.ScorecardData{Live: lp.StrategyName(), Card: card, Candidates: dec, AsOf: asOf, Unavailable: unavailable}, nil
 	})
+	web.RegisterCharts(mux, web.ChartsSources{ // read-only: /scorecard drawn as charts and diagrams
+		Live: func(ctx context.Context) (*web.LiveCharts, error) {
+			since, books, err := shadow.Series(ctx, j)
+			if err != nil {
+				return nil, err
+			}
+			dec, asOf, _, err := lp.CandidateDecisions(ctx)
+			if err != nil {
+				return nil, err
+			}
+			counts, err := j.Counts(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &web.LiveCharts{Live: lp.StrategyName(), Symbols: lp.Symbols, Since: since, Books: books,
+				Decisions: dec, AsOf: asOf, Counts: counts}, nil
+		},
+		Backtest: func(ctx context.Context) (*web.BacktestSet, error) {
+			return chartBacktest(ctx, md, lp.Symbols, lp.StrategyName(), 4.95)
+		},
+	})
 
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)

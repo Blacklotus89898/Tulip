@@ -203,7 +203,7 @@ details{margin-top:.4rem} summary{cursor:pointer;color:var(--muted)} li{margin:.
 </style></head><body>
 <h1>🌷 Tulip scorecard</h1>
 {{if .Error}}<p class="err">{{.Error}}</p>{{else}}
-<div class="k">Live strategy: <b>{{.Live}}</b> · read-only · updated {{.Built}}</div>
+<div class="k">Live strategy: <b>{{.Live}}</b> · read-only · updated {{.Built}} · <a href="charts">charts &amp; diagrams</a></div>
 {{if .Since}}
 <h2>Since {{.Since}} <span class="k">({{.Days}} trading days)</span></h2>
 {{range .Books}}

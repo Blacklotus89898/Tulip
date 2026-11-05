@@ -203,7 +203,7 @@ func (r *Runner) rebalance(ctx context.Context, in Input, a strategy.Allocator, 
 		}
 		fills++
 	}
-	_, err = r.J.Append(ctx, KindRebalanced, in.Cycle, map[string]any{"book": name, "strategy": a.Name(), "month": in.Month,
+	_, err = r.J.Append(ctx, KindRebalanced, in.Cycle, map[string]any{"book": name, "strategy": a.Name(), "month": in.Month, "day": in.Day,
 		"as_of": in.AsOf, "targets": dec.Targets, "reasons": dec.Reasons, "fills": fills, "rejected": rejected})
 	return err
 }

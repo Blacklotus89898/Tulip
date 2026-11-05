@@ -100,6 +100,14 @@ Full reasoning in [ADR 0001](docs/adr/0001-architecture.md).
   operator decides) is in ADR 0004.
 - **`/scorecard` page** (read-only, phone-friendly): the same comparison
   plus each candidate's current holdings and reasons. Cached for 10 minutes.
+- **`/charts` page** (read-only, phone-friendly): the scorecard drawn. Book
+  values indexed to 100 since the common start plus each book's drop from
+  peak (the same marks the scorecard measures); the pre-registered backtest
+  as growth of $10,000 on a log scale with the held-out 30% shaded ($4.95
+  per order, recomputed daily); a flow diagram per strategy — each ETF →
+  the rule's test → today's weight, with the reasons; and the decision
+  pipeline (rules → proposed → Thorn → Claude review → you / paper training
+  → Thorn at fill → fills) with journal counts at each step.
 - **Monthly push:** one ntfy message per month, right after that month's
   shadow rebalance. It gives return, max drop and sells per book, and opens
   `/scorecard` when tapped. In the first month it lists positions instead.

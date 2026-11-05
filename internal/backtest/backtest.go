@@ -130,7 +130,33 @@ type Result struct {
 	Rejected    map[string]int     `json:"thorn_rejections"` // reason → count
 	Years       []YearRow          `json:"years"`
 	FinalEquity float64            `json:"final_equity"`
-	TradeLog    []Trade            `json:"trade_log"`
+	// Curves for charts: equity sampled weekly (plus the last day), the
+	// strategy and the buy-and-hold benchmark on the same days.
+	Curve        []Point `json:"curve,omitempty"`
+	BenchCurve   []Point `json:"bench_curve,omitempty"`
+	HoldoutStart string  `json:"holdout_start,omitempty"` // first day of the held-out final period
+	TradeLog     []Trade `json:"trade_log"`
+}
+
+// Point is one sample of an equity curve.
+type Point struct {
+	Day    string  `json:"day"`
+	Equity float64 `json:"equity"`
+}
+
+// CurveStep is the sampling interval in trading days (~weekly): 12 years is
+// ~600 points per curve, plenty for a chart and small enough to serve.
+const CurveStep = 5
+
+func curve(days []time.Time, eq []float64) []Point {
+	out := make([]Point, 0, len(days)/CurveStep+2)
+	for i := 0; i < len(days); i += CurveStep {
+		out = append(out, Point{key(days[i]), math.Round(eq[i]*100) / 100})
+	}
+	if last := len(days) - 1; last%CurveStep != 0 {
+		out = append(out, Point{key(days[last]), math.Round(eq[last]*100) / 100})
+	}
+	return out
 }
 
 // YearRow compares calendar-year returns.
@@ -297,6 +323,7 @@ func Run(bars map[string][]marketdata.Candle, symbols []string, cfg Config) (*Re
 		"bench_equal_weight": metrics(days[h:], ew[h:]),
 	}
 	res.Years = years(days, equity, bh, ew)
+	res.Curve, res.BenchCurve, res.HoldoutStart = curve(days, equity), curve(days, bh), key(days[h])
 	res.Params = map[string]any{"mean_days": m.MeanDays, "return_days": m.ReturnDays, "vol_days": m.VolDays,
 		"target_vol": m.TargetVol, "max_weight": m.MaxWeight, "cash": cfg.Cash, "slippage_bps": cfg.SlippageBps,
 		"commission": cfg.Commission, "fill": "next day's open", "prices": "dividend-adjusted",
@@ -467,6 +494,7 @@ func RunAllocator(bars map[string][]marketdata.Candle, symbols []string, alloc s
 		"bench_equal_weight": metrics(days[h:], ew[h:]),
 	}
 	res.Years = years(days, equity, bh, ew)
+	res.Curve, res.BenchCurve, res.HoldoutStart = curve(days, equity), curve(days, bh), key(days[h])
 	res.Params = map[string]any{"strategy": alloc.Name(), "rebalance": "monthly, next open", "band": cfg.Band,
 		"cash": cfg.Cash, "slippage_bps": cfg.SlippageBps, "commission": cfg.Commission, "prices": "dividend-adjusted",
 		"thorn_max_order": cfg.Thorn.MaxOrderValue, "thorn_max_weight": cfg.Thorn.MaxPositionWeight}
