@@ -113,9 +113,10 @@ type Desk struct {
 	Cfg            Config
 	PassphraseHash string // TULIP_APPROVAL_PASSPHRASE_HASH; empty = approvals disabled
 	Limiter        *approval.Limiter
-	Notify         func(Suggestion) // set by the service (ntfy); may be nil
-	Account        AccountSource    // co-pilot mode (ADR 0003): the real account; nil = paper
-	AutoPaper      bool             // paper training (ADR 0005): rules suggestions fill without approval
+	Notify         func(Suggestion)   // set by the service (ntfy); may be nil
+	Account        AccountSource      // co-pilot mode (ADR 0003): the real account; nil = paper
+	AutoPaper      bool               // paper training (ADR 0005): rules suggestions fill without approval
+	Cal            *calendar.Exchange // the desk's exchange (ADR 0006); nil = TSX
 	Now            func() time.Time
 
 	mu sync.Mutex
@@ -141,7 +142,7 @@ var (
 	ErrNotPending        = errors.New("suggestion is not pending (approved, declined, expired or unknown)")
 	ErrChanged           = errors.New("the proposal changed since it was displayed")
 	ErrExpired           = errors.New("suggestion expired")
-	ErrMarketClosed      = errors.New("TSX is closed — approve during regular hours (the suggestion stays pending until it expires)")
+	ErrMarketClosed      = errors.New("the market is closed — approve during regular hours (the suggestion stays pending until it expires)")
 )
 
 // ---- state, derived from the journal ----
@@ -475,7 +476,7 @@ func (d *Desk) Approve(ctx context.Context, id, displayedHash, passphrase string
 		_, _ = d.J.Append(ctx, KindSuggestionExpired, "", map[string]string{"id": s.ID})
 		return nil, d.deny(ctx, id, who, ErrExpired)
 	}
-	if open, _ := calendar.IsOpen(now); !open {
+	if open, _ := d.Cal.IsOpen(now); !open {
 		return nil, d.deny(ctx, id, who, ErrMarketClosed) // not claimed: retry within TTL
 	}
 	if err := d.J.ClaimApproval(ctx, id); err != nil {
@@ -503,7 +504,7 @@ func (d *Desk) execute(ctx context.Context, s *Suggestion, now time.Time) (*port
 	}
 	if s.SignalOn != "" {
 		day, err := time.ParseInLocation("2006-01-02", s.SignalOn, calendar.Toronto)
-		_, signalClose := calendar.SessionBounds(day)
+		_, signalClose := d.Cal.SessionBounds(day)
 		if err != nil || !q.Time.After(signalClose) {
 			return reject("quote is not newer than the signal bar's close (would fill at the signal price)")
 		}
@@ -564,7 +565,7 @@ func (d *Desk) AutoExecute(ctx context.Context, id string) (*portfolio.Fill, err
 		return nil, ErrAutoExecute
 	}
 	now := d.now()
-	if open, _ := calendar.IsOpen(now); !open {
+	if open, _ := d.Cal.IsOpen(now); !open {
 		return nil, ErrMarketClosed
 	}
 	if err := d.J.ClaimApproval(ctx, id); err != nil {
@@ -590,7 +591,7 @@ func (d *Desk) InitBenchmark(ctx context.Context) (*portfolio.Fill, error) {
 	if !b.Funded || len(b.Positions) > 0 || b.Fills > 0 {
 		return nil, nil
 	}
-	if open, _ := calendar.IsOpen(d.now()); !open {
+	if open, _ := d.Cal.IsOpen(d.now()); !open {
 		return nil, nil
 	}
 	q, err := d.MD.Quote(ctx, cfg.Benchmark)

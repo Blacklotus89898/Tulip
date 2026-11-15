@@ -35,14 +35,25 @@ becomes a setting of each **desk**:
 | desk | universe | broker | mode | who places orders |
 |---|---|---|---|---|
 | `tsx` (existing) | XIU, VFV, XEF, safe ZAG (CAD) | Questrade, read-only | `paper` or `copilot`, as today | the operator, in Questrade (ADR 0003) |
-| `us` (new) | US-listed ETFs (§3) | IBKR paper account | `ibkr-paper` | Tulip, through the API |
+| `us` (new) | IVV, EFA, safe IEF (USD) (§3) | `paper` now (synthetic fills); `ibkr-paper` after the spike | paper | Tulip (synthetic, then through the API) |
 
-- Each desk has its own strategy book, benchmark book, shadow books,
-  journal tags (`desk` on every event) and Thorn limits. The two desks never
-  net across currencies or books.
-- Existing behaviour does not change. With no `us` desk configured, Tulip
-  runs exactly as it does now. The journal stays one append-only file, and
-  events without a `desk` are read as `tsx`.
+- **One journal per desk** (amended 2026-11-15, before any code). The TSX desk
+  keeps `data/tulip.db` and the US desk writes `data/tulip-us.db`. Each desk has
+  its own strategy book, benchmark book, shadow books, Thorn limits and
+  calendar (`calendar.NYSE`), so no replay code changes and single-use claims
+  (`approvals_used`, `executions_seen`) stay per desk. The cost: there is no
+  single query across desks, and the kill switch is a fan-out (MCP
+  `kill_switch_arm` arms **every** desk and fails closed if any one fails).
+  The two desks never net across currencies or books.
+- **Off by default.** `TULIP_US=on` adds the US desk; every other `TULIP_US_*`
+  variable has a default (symbols, strategy, benchmark, auto-execute, Thorn
+  caps). With it unset, Tulip runs exactly as before: a nil calendar is TSX,
+  and the TSX desk's journal payloads, metric names and page paths are
+  unchanged. The US pages live under `/us/`, and MCP tools take an optional
+  `desk` argument (default `tsx`; an unknown desk is an error).
+- **US Thorn defaults:** order cap 10,000, position cap 0.55 (two risk ETFs at
+  1/2 each; the TSX desk's 0.4 would refuse the plan), safe asset up to 100%,
+  8 suggestions a day. Override with `TULIP_US_THORN_*`.
 - There is no `ibkr-live` mode in this ADR. Live IBKR trading needs its own
   ADR, with human approval kept on (§7).
 
@@ -56,11 +67,11 @@ trigger it over MCP or HTTP. Because IBKR fills orders asynchronously, an
 `order.submitted` event is journaled first, and the fill (§5) settles it later.
 
 ### 3. The US universe and its benchmark
-- These are pre-registered candidates, chosen to mirror the TSX universe. The
-  last symbol is the safe asset, as in ADR 0004:
-  **IVV (or VOO) · VXUS or IEFA · safe: BND (or IEF)**.
-  The exact list is fixed in the spike PR, together with its backtest, before
-  any order is sent.
+- **Operator decision 2026-11-15: IVV · EFA · safe IEF, with trend-filter-200
+  live.** Three universes were fixed before any result was seen and
+  backtested (`docs/backtests/`, 2026-11-15). This one has the longest history
+  (2003+, so it includes 2008) and mirrors the TSX desk's shape. EFA was chosen
+  over its cheaper twin IEFA because it is the fund that was backtested.
 - The benchmark is a USD buy-and-hold of the US equity ETF (IVV). Scorecards
   compare percentages and never mix CAD and USD.
 - The ADR 0004 candidate set runs as shadow books on this universe from day
@@ -154,7 +165,9 @@ it off.
    reconsider Rust or vendoring the subset.
 2. Backtest the US universe (`docs/backtests/`), then fix the symbol list.
 3. Desk refactor (§1): make mode, broker and books per desk, with the `tsx`
-   desk behaving byte-for-byte as before. Tests pin that.
+   desk behaving as before. Tests pin that. Until the IBKR broker exists, the
+   US desk runs paper training (ADR 0005) on synthetic fills, so its 12-month
+   shadow clock starts now.
 4. IBKR broker plus reconciliation, with tests against a fake TWS server.
 5. Homelab PR: the Gateway sidecar, the SealedSecret, `TULIP_DESKS`, and an
    SLO probe on Tulip's view of the broker connection.
