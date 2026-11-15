@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
-	"github.com/Blacklotus89898/Tulip/internal/calendar"
 	"github.com/Blacklotus89898/Tulip/internal/desk"
 	"github.com/Blacklotus89898/Tulip/internal/journal"
 	"github.com/Blacklotus89898/Tulip/internal/loop"
@@ -17,8 +17,39 @@ import (
 // tool either reads, proposes (→ Thorn → a pending suggestion), or REDUCES
 // risk (decline, arm the kill switch). None approves, executes or disarms —
 // tools_test.go enforces that list.
-func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
+func tools(envs []*deskEnv) []mcp.Tool {
+	names := []string{}
+	for _, e := range envs {
+		names = append(names, e.Name)
+	}
+	if len(names) == 0 {
+		names = []string{"tsx"}
+	}
+	deskProp := map[string]any{"type": "string", "enum": names,
+		"description": "which desk (ADR 0006): tsx (default; the Questrade/TSX desk) or us (US-listed ETFs)"}
+	// pick resolves the optional "desk" argument; no argument is the TSX desk.
+	pick := func(args json.RawMessage) (*desk.Desk, *loop.Loop, *journal.Journal, *deskEnv, error) {
+		var a struct {
+			Desk string `json:"desk"`
+		}
+		if len(args) > 0 {
+			_ = json.Unmarshal(args, &a)
+		}
+		if a.Desk == "" {
+			a.Desk = "tsx"
+		}
+		for _, e := range envs {
+			if e.Name == a.Desk {
+				return e.D, e.LP, e.J, e, nil
+			}
+		}
+		return nil, nil, nil, nil, fmt.Errorf("unknown desk %q (have %v)", a.Desk, names)
+	}
 	obj := func(props map[string]any, required ...string) map[string]any {
+		if props == nil {
+			props = map[string]any{}
+		}
+		props["desk"] = deskProp
 		s := map[string]any{"type": "object", "properties": props}
 		if len(required) > 0 {
 			s["required"] = required
@@ -30,22 +61,34 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 		b, err := json.MarshalIndent(v, "", "  ")
 		return string(b), err
 	}
-	return []mcp.Tool{
+	list := []mcp.Tool{
 		{
 			Name:        "tulip_status",
 			Description: "Mode, version, market open, kill switch, pending suggestions and journal counts.",
-			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				st, err := d.LoadState(ctx)
 				if err != nil {
 					return "", err
 				}
 				counts, _ := j.Counts(ctx)
-				open, calErr := calendar.IsOpen(d.Now0())
+				open, calErr := d.Cal.IsOpen(d.Now0())
 				mode, approvalHow := "paper", "human-only (passphrase on the approval page)"
 				if d.CoPilot() {
 					mode, approvalHow = "copilot", "the operator places every order in Questrade; Tulip only reads the account"
 				}
+				if env.Name != "tsx" {
+					approvalHow = "paper training on synthetic fills (ADR 0006: IBKR paper broker not wired yet)"
+					if !d.AutoPaper {
+						approvalHow = "human-only (passphrase on the " + env.Prefix() + "/approve page)"
+					}
+				}
 				out := map[string]any{
+					"desk": env.Name, "exchange": d.Cal.String(), "desks": names,
 					"version": version, "mode": mode, "approval": approvalHow, "strategy": lp.StrategyName(),
 					"market_open": open, "kill_switch": st.KillSwitch, "kill_reason": st.KillReason,
 					"pending": len(st.Pending), "approvals_enabled": d.PassphraseHash != "",
@@ -63,6 +106,11 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			InputSchema: obj(map[string]any{"kind": str, "cycle": str,
 				"limit": map[string]any{"type": "integer"}, "after_id": map[string]any{"type": "integer"}}),
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				var a struct {
 					Kind, Cycle string
 					Limit       int   `json:"limit"`
@@ -81,7 +129,12 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 		{
 			Name:        "portfolio",
 			Description: "Strategy and benchmark books (cash, positions, realized P&L), marked at cost — compare them to judge the strategy.",
-			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				st, err := d.LoadState(ctx)
 				if err != nil {
 					return "", err
@@ -98,7 +151,12 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			Description: "Co-pilot mode (ADR 0003): a fresh READ-ONLY snapshot of the one Questrade account (CAD cash, " +
 				"equity, whole-share holdings) and the strategy's attributed trades (suggestions the operator acted on, " +
 				"with slippage). Paper mode: says so. Never places or changes anything.",
-			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				if !d.CoPilot() {
 					return pretty(map[string]any{"mode": "paper", "note": "no broker connected — see the portfolio tool"})
 				}
@@ -121,7 +179,12 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			Description: "READ-ONLY: what the allocator (default trend-filter-200) would target from today's completed " +
 				"bars, the book's current weights, and the orders that would get there. Proposes nothing — the live " +
 				"rebalance runs itself in the first 5 trading days of each month.",
-			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				p, unavailable, err := lp.Preview(ctx)
 				if err != nil {
 					return "", err
@@ -138,7 +201,12 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 				"the shadow book of each pre-registered candidate (ADR 0004): return, max drawdown, trades, sells " +
 				"(taxable in a cash account), fees, realized P&L — plus what each candidate would hold on today's " +
 				"completed bars, with its reasons. Promotion is the operator's decision (12 months + backtest gate).",
-			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				card, err := shadow.Build(ctx, j)
 				if err != nil {
 					return "", err
@@ -154,7 +222,12 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 		{
 			Name:        "suggestions_pending",
 			Description: "Suggestions waiting for the operator (paper: to approve; co-pilot: to place in Questrade), with their page path.",
-			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				st, err := d.LoadState(ctx)
 				if err != nil {
 					return "", err
@@ -165,7 +238,7 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 				}
 				out := []row{}
 				for _, s := range st.Pending {
-					out = append(out, row{s, "/approve/" + s.ID})
+					out = append(out, row{s, env.Prefix() + "/approve/" + s.ID})
 				}
 				return pretty(out)
 			},
@@ -180,6 +253,11 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 				"confidence": map[string]any{"type": "number", "minimum": 0, "maximum": 1},
 			}, "symbol", "side", "qty", "rationale"),
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				var a struct {
 					Symbol, Side, Rationale string
 					Qty                     int      `json:"qty"`
@@ -196,7 +274,7 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 				if s == nil {
 					return pretty(map[string]any{"created": false, "thorn": v})
 				}
-				return pretty(map[string]any{"created": true, "suggestion": s, "approve_page": "/approve/" + s.ID,
+				return pretty(map[string]any{"created": true, "suggestion": s, "approve_page": env.Prefix() + "/approve/" + s.ID,
 					"note": "pending — only the operator can approve it"})
 			},
 		},
@@ -211,6 +289,11 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 				"confidence": map[string]any{"type": "number", "minimum": 0, "maximum": 1}, "rationale": str,
 			}, "id", "verdict", "confidence", "rationale"),
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				var a struct {
 					ID, Verdict, Rationale string
 					Qty                    int     `json:"qty"`
@@ -231,6 +314,11 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			Description: "Decline a pending suggestion (reduces risk; no approval needed).",
 			InputSchema: obj(map[string]any{"id": str, "reason": str}, "id", "reason"),
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				var a struct{ ID, Reason string }
 				if err := json.Unmarshal(args, &a); err != nil {
 					return "", fmt.Errorf("bad arguments: %w", err)
@@ -242,24 +330,39 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			},
 		},
 		{
-			Name:        "kill_switch_arm",
-			Description: "Arm the kill switch: nothing executes until the operator disarms it with their passphrase.",
+			Name: "kill_switch_arm",
+			Description: "Arm the kill switch on EVERY desk (any desk argument is ignored): nothing executes until " +
+				"the operator disarms each one with their passphrase.",
 			InputSchema: obj(map[string]any{"reason": str}, "reason"),
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
 				var a struct{ Reason string }
 				if err := json.Unmarshal(args, &a); err != nil {
 					return "", fmt.Errorf("bad arguments: %w", err)
 				}
-				if err := d.ArmKillSwitch(ctx, "claude-code", a.Reason); err != nil {
-					return "", err
+				// Fail closed: try every desk, and return an error if any one failed.
+				var failed, pages []string
+				for _, e := range envs {
+					if err := e.D.ArmKillSwitch(ctx, "claude-code", a.Reason); err != nil {
+						failed = append(failed, e.Name+": "+err.Error())
+						continue
+					}
+					pages = append(pages, e.Prefix()+"/killswitch")
 				}
-				return "kill switch armed (disarm: the operator, at /killswitch)", nil
+				if len(failed) > 0 {
+					return "", fmt.Errorf("kill switch NOT armed on every desk: %s (armed at: %v)", strings.Join(failed, "; "), pages)
+				}
+				return "kill switch armed on every desk (disarm: the operator, at " + strings.Join(pages, " and ") + ")", nil
 			},
 		},
 		{
 			Name:        "cycle_run",
-			Description: "Run one observe → rules → Thorn → suggest cycle now (only creates suggestions; outside TSX hours it only expires stale ones). With an allocator (default trend-filter-200) it works on the month's rebalance during the first 5 trading days.",
-			Call: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Description: "Run one observe → rules → Thorn → suggest cycle now on the chosen desk (only creates suggestions; outside market hours it only expires stale ones). With an allocator (default trend-filter-200) it works on the month's rebalance during the first 5 trading days.",
+			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
+				d, lp, j, env, err := pick(args)
+				if err != nil {
+					return "", err
+				}
+				_, _, _, _ = d, lp, j, env
 				res, err := lp.Cycle(ctx, "mcp")
 				if err != nil {
 					return "", err
@@ -268,4 +371,10 @@ func tools(d *desk.Desk, lp *loop.Loop, j *journal.Journal) []mcp.Tool {
 			},
 		},
 	}
+	for i := range list { // every tool takes the optional desk argument
+		if list[i].InputSchema == nil {
+			list[i].InputSchema = obj(nil)
+		}
+	}
+	return list
 }
