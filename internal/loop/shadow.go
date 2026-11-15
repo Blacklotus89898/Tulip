@@ -18,7 +18,7 @@ func (l *Loop) shadowCycle(ctx context.Context, cycle string, hist HistorySource
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, calendar.Toronto)
 	in := shadow.Input{Cycle: cycle, Day: now.Format("2006-01-02"), Month: now.Format("2006-01"), Now: now,
 		Quotes: map[string]marketdata.Quote{}}
-	n, err := tradingDaysSince(monthStart, now)
+	n, err := tradingDaysSince(l.Desk.Cal, monthStart, now)
 	in.InWindow = err == nil && n <= rebalanceWindow
 	if in.InWindow {
 		var res Result

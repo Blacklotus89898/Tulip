@@ -17,7 +17,7 @@ var allowedTools = map[string]bool{
 }
 
 func TestMCPToolsAreAllowlisted(t *testing.T) {
-	for _, tool := range tools(nil, nil, nil) {
+	for _, tool := range tools(nil) {
 		if !allowedTools[tool.Name] {
 			t.Errorf("tool %q is not on the reviewed allowlist", tool.Name)
 		}

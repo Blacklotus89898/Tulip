@@ -90,7 +90,7 @@ func (l *Loop) Cycle(ctx context.Context, trigger string) (Result, error) {
 	defer l.cycleMu.Unlock()
 	cycle := newCycleID()
 	j := l.Desk.J
-	open, calErr := calendar.IsOpen(l.now())
+	open, calErr := l.Desk.Cal.IsOpen(l.now())
 	res := Result{Cycle: cycle, MarketOpen: open}
 	_, _ = j.Append(ctx, "cycle.started", cycle, map[string]any{"trigger": trigger, "market_open": open})
 	defer func() { _, _ = j.Append(ctx, "cycle.finished", cycle, res) }()
@@ -202,7 +202,7 @@ func (l *Loop) Run(ctx context.Context) {
 				continue
 			}
 			done[key] = true
-			if ok, err := calendar.IsTradingDay(now); err != nil || !ok {
+			if ok, err := l.Desk.Cal.IsTradingDay(now); err != nil || !ok {
 				continue
 			}
 			res, err := l.Cycle(ctx, "schedule "+at)
