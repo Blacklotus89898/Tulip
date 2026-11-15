@@ -73,6 +73,14 @@ Full reasoning in [ADR 0001](docs/adr/0001-architecture.md).
   own suggestions in the paper book without approval (same execution checks,
   journaled `order.auto_executed`). Paper mode only; MCP/brain proposals still
   wait for a human.
+- **US desk** (ADR 0006, off by default): `TULIP_US=on` adds a second desk for
+  US-listed ETFs (IVV, EFA, safe IEF; trend-filter-200; benchmark IVV; NYSE
+  calendar) with its own journal (`data/tulip-us.db`), pages under `/us/` and
+  a `desk` argument on every MCP tool. It is paper only, on synthetic fills
+  until the IBKR broker lands. Knobs: `TULIP_US_AUTOEXECUTE=paper`,
+  `TULIP_US_SYMBOLS`, `TULIP_US_STRATEGY`, `TULIP_US_BENCHMARK`, `TULIP_US_SHADOW`,
+  `TULIP_US_DB`, `TULIP_US_THORN_*` (same names as `TULIP_THORN_*`). The MCP
+  `kill_switch_arm` arms every desk.
 - **Set the passphrase** (once, on your own machine — only the hash goes in
   the cluster):
   ```bash

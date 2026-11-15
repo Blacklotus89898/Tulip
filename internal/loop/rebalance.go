@@ -59,7 +59,7 @@ func (l *Loop) rebalanceOnce(ctx context.Context, cycle string, hist HistorySour
 	if done, err := l.monthDone(ctx, month); err != nil || done {
 		return false, err
 	}
-	n, err := tradingDaysSince(monthStart, now)
+	n, err := tradingDaysSince(l.Desk.Cal, monthStart, now)
 	if err != nil {
 		return false, err
 	}
@@ -270,7 +270,7 @@ func (l *Loop) completedBars(ctx context.Context, cycle string, src HistorySourc
 func (l *Loop) previewCutoff() time.Time {
 	now := l.now().In(calendar.Toronto)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, calendar.Toronto)
-	if calendar.SessionClosed(today, now) {
+	if l.Desk.Cal.SessionClosed(today, now) {
 		return today.AddDate(0, 0, 1) // today's bar is complete
 	}
 	return today
@@ -358,11 +358,12 @@ func (l *Loop) monthDone(ctx context.Context, month string) (bool, error) {
 	return false, nil
 }
 
-// tradingDaysSince counts TSX trading days from start through day (inclusive).
-func tradingDaysSince(start, day time.Time) (int, error) {
+// tradingDaysSince counts the exchange's trading days from start through day
+// (inclusive). A nil exchange is TSX.
+func tradingDaysSince(x *calendar.Exchange, start, day time.Time) (int, error) {
 	n := 0
 	for d := start; !d.After(day); d = d.AddDate(0, 0, 1) {
-		ok, err := calendar.IsTradingDay(d)
+		ok, err := x.IsTradingDay(d)
 		if err != nil {
 			return 0, err
 		}

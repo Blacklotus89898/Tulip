@@ -73,6 +73,9 @@ func ByName(name string) (*Exchange, bool) {
 	return nil, false
 }
 
+// String is the exchange name; a nil *Exchange is "TSX".
+func (x *Exchange) String() string { return x.or().Name }
+
 func (x *Exchange) or() *Exchange {
 	if x == nil {
 		return TSX
