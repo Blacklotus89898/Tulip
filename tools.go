@@ -197,7 +197,7 @@ func tools(envs []*deskEnv) []mcp.Tool {
 		},
 		{
 			Name: "scorecard",
-			Description: "READ-ONLY: every book compared from a common start — the live paper book, the XIU benchmark and " +
+			Description: "READ-ONLY: every book compared from a common start — the live paper book, the buy-and-hold benchmark (XIU on tsx, IVV on us) and " +
 				"the shadow book of each pre-registered candidate (ADR 0004): return, max drawdown, trades, sells " +
 				"(taxable in a cash account), fees, realized P&L — plus what each candidate would hold on today's " +
 				"completed bars, with its reasons. Promotion is the operator's decision (12 months + backtest gate).",
