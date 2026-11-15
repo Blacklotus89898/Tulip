@@ -83,3 +83,40 @@ trades about twice as often. In a cash account each sell is a taxable event,
 so its edge has to survive that (ADR 0004 §4). It was added after the
 lookback sensitivity was seen (mild look-ahead), so it is judged by the
 shadow books, not by this table.
+
+## 2026-11-15: US universes for the IBKR desk (ADR 0006)
+
+Reproduce: `go run . backtest -compare -symbols <U> -benchmark IVV -commission 0 -commission-alt 1.00`
+(the `-benchmark` flag is new; its default, XIU.TO, keeps the TSX runs unchanged).
+The three universes were **fixed before any result was seen**. Prices are USD
+and dividend-adjusted, with **no 15% US withholding tax and no CAD→USD FX
+cost**. $1.00 is IBKR Pro's per-order minimum. Raw output:
+`2026-11-15-us-*.txt`.
+
+| universe (safe last) | period | trend-filter-200 | equal-weight | dual-mom-12m | buy & hold IVV | equal-wt hold |
+|---|---|---|---|---|---|---|
+| IVV, EFA, IEF | 2003-08 → 2026-11 | +8.6% / −26% / 0.72 | +7.7% / −39% / 0.68 | +8.5% / −29% / 0.64 | **+11.2%** / −55% / 0.67 | +8.3% / −41% / 0.67 |
+| IVV, EFA, EEM, IEF | 2004-04 → 2026-11 | +8.0% / −23% / 0.64 | +7.6% / −45% / 0.57 | +9.8% / −29% / 0.60 | **+10.7%** / −55% / 0.64 | +7.6% / −48% / 0.53 |
+| IVV, VXUS, BND | 2012-02 → 2026-11 | +7.0% / −24% / 0.65 | +7.8% / −23% / 0.75 | +6.8% / −33% / 0.54 | **+14.3%** / −34% / 0.89 | +9.3% / −26% / 0.77 |
+
+(CAGR / max drawdown / Sharpe; holdout = the final 30%, in the raw files.)
+
+### Conclusions
+
+1. **Same story as the TSX desk: no rule beats buy-and-hold on return.**
+   Holding IVV alone won every window. These were the decades the US led,
+   and the result is not evidence that this will continue.
+2. **The trend filter's case is drawdown, not return.** Over 2003+, which
+   includes 2008, it cut the worst loss from **−55% to −26%** for about 2.6
+   points of CAGR. It is robust across lookbacks: 100–250 days gives 7.5–9.8%
+   CAGR and −21 to −28% drawdown. Dual momentum is again fragile: 189 days
+   gives 6.2% and 315 days gives 9.9%.
+3. **Costs don't matter at $1/order:** trend-filter-200 is 8.6% at both $0
+   and $1. momentum-v1 stays retired (+0.8%, about 1,600 trades).
+4. **Proposed for the US desk:** universe **IVV, EFA, IEF** (the longest
+   history, it covers 2008, and it mirrors the TSX desk's shape), with
+   **trend-filter-200** live, matching the TSX desk. The other ADR 0004
+   candidates run as shadows, and the benchmark is buy-and-hold IVV. The
+   operator decides. IEFA (0.07%) is a cheaper twin of EFA (0.32%), but it
+   only has history from 2012. Trading the fund that was backtested keeps the
+   record honest; switching to IEFA would be a separate decision.

@@ -24,7 +24,8 @@ import (
 func runBacktest(args []string) error {
 	fs := flag.NewFlagSet("backtest", flag.ExitOnError)
 	symbols := fs.String("symbols", "XIU.TO,VFV.TO,XEF.TO,ZAG.TO", "symbols the strategy trades")
-	cash := fs.Float64("cash", 10000, "starting cash (CAD)")
+	bench := fs.String("benchmark", "XIU.TO", "buy-and-hold benchmark symbol (US desk: IVV)")
+	cash := fs.Float64("cash", 10000, "starting cash (in the universe's currency)")
 	commission := fs.Float64("commission", 0, "per-order commission (CAD); also try 4.95/9.95")
 	slippage := fs.Float64("slippage-bps", 10, "slippage per fill, basis points")
 	maxOrder := fs.Float64("max-order", 0, "Thorn per-order cap (0 = default 2500)")
@@ -39,7 +40,7 @@ func runBacktest(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	bars := map[string][]marketdata.Candle{}
-	for _, s := range append(append([]string{}, syms...), "XIU.TO") {
+	for _, s := range append(append([]string{}, syms...), *bench) {
 		if _, ok := bars[s]; ok {
 			continue
 		}
@@ -54,7 +55,7 @@ func runBacktest(args []string) error {
 	if *maxOrder > 0 {
 		th.MaxOrderValue = *maxOrder
 	}
-	cfg := backtest.Config{Thorn: th, Cash: *cash, SlippageBps: *slippage, Commission: *commission}
+	cfg := backtest.Config{Thorn: th, Cash: *cash, SlippageBps: *slippage, Commission: *commission, Benchmark: *bench}
 	if *compare {
 		return runCompare(bars, syms, cfg, []float64{*commission, *commissionAlt})
 	}
@@ -111,12 +112,12 @@ func printResult(r *backtest.Result) {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%.0f%%\t%.2f\t\n", name, pct(m.TotalReturn), pct(m.CAGR), pct(m.MaxDrawdown), m.AnnVol*100, m.Sharpe)
 	}
 	row("strategy", r.Strategy)
-	row("buy & hold XIU", r.BenchXIU)
+	row("buy & hold benchmark", r.BenchXIU)
 	row("equal-weight hold", r.BenchEqual)
 	h := r.Holdout
 	fmt.Fprintf(w, "— held-out %s → %s —\t\t\t\t\t\t\n", h["strategy"].From, h["strategy"].To)
 	row("strategy", h["strategy"])
-	row("buy & hold XIU", h["bench_buy_hold"])
+	row("buy & hold benchmark", h["bench_buy_hold"])
 	row("equal-weight hold", h["bench_equal_weight"])
 	w.Flush()
 
@@ -195,7 +196,7 @@ func runCompare(bars map[string][]marketdata.Candle, syms []string, base backtes
 			}
 			row(a.Name(), r)
 		}
-		fmt.Fprintf(w, "buy & hold XIU (benchmark)\t%s\t%s\t%.2f\t%s\t%s\t1\t100%%\t\n", pct(first.BenchXIU.CAGR), pct(first.BenchXIU.MaxDrawdown),
+		fmt.Fprintf(w, "buy & hold %s (benchmark)\t%s\t%s\t%.2f\t%s\t%s\t1\t100%%\t\n", base.Benchmark, pct(first.BenchXIU.CAGR), pct(first.BenchXIU.MaxDrawdown),
 			first.BenchXIU.Sharpe, pct(first.Holdout["bench_buy_hold"].CAGR), pct(first.Holdout["bench_buy_hold"].MaxDrawdown))
 		fmt.Fprintf(w, "equal-weight hold (benchmark)\t%s\t%s\t%.2f\t%s\t%s\t4\t100%%\t\n", pct(first.BenchEqual.CAGR), pct(first.BenchEqual.MaxDrawdown),
 			first.BenchEqual.Sharpe, pct(first.Holdout["bench_equal_weight"].CAGR), pct(first.Holdout["bench_equal_weight"].MaxDrawdown))
