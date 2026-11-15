@@ -1,0 +1,37 @@
+universe: risk [IVV VXUS] · safe BND
+
+=== commission 0.00 per order · slippage 10 bps · dividend-adjusted · fills next open ===
+                      candidate    CAGR  Max DD  Sharpe  HOLDOUT CAGR  holdout DD  trades  exposure
+        momentum-v1 (live caps)   +0.8%   -7.6%    0.24         +2.2%       -4.0%    1017       34%
+     momentum-v1 (caps relaxed)   +0.8%   -7.6%    0.24         +2.2%       -4.0%    1017       34%
+               trend-filter-200   +7.0%  -23.9%    0.65        +10.4%      -10.7%     113       99%
+                   equal-weight   +7.8%  -23.2%    0.75        +10.1%      -13.3%      33       99%
+                 trend-ensemble   +7.4%  -22.6%    0.71        +10.7%      -11.5%     198       99%
+              dual-momentum-12m   +6.8%  -33.1%    0.54         +8.3%      -23.4%      85       99%
+                 inverse-vol-60   +4.9%  -19.4%    0.76         +6.9%      -10.8%     164       98%
+     buy & hold IVV (benchmark)  +14.3%  -33.9%    0.89        +16.0%      -18.7%       1      100%
+  equal-weight hold (benchmark)   +9.3%  -26.4%    0.77        +12.8%      -14.6%       4      100%
+period 2012-02-08 → 2026-11-13 · holdout from 2022-06-07
+sensitivity (same rules, neighbouring lookbacks — robust = similar numbers):
+             variant   CAGR  Max DD  Sharpe  holdout CAGR
+  dual-momentum 126d  +7.0%  -30.1%    0.58        +14.1%
+  dual-momentum 189d  +6.4%  -31.2%    0.52        +11.8%
+  dual-momentum 252d  +6.9%  -33.0%    0.55        +10.8%
+  dual-momentum 315d  +8.8%  -28.4%    0.67        +14.1%
+   trend-filter 100d  +7.0%  -25.6%    0.69         +9.7%
+   trend-filter 150d  +9.0%  -23.5%    0.83        +10.6%
+   trend-filter 200d  +7.9%  -24.0%    0.73        +10.5%
+   trend-filter 250d  +9.6%  -20.1%    0.85        +12.6%
+
+=== commission 1.00 per order · slippage 10 bps · dividend-adjusted · fills next open ===
+                      candidate    CAGR  Max DD  Sharpe  HOLDOUT CAGR  holdout DD  trades  exposure
+        momentum-v1 (live caps)   +0.0%  -11.2%    0.02         +1.5%       -4.5%    1017       34%
+     momentum-v1 (caps relaxed)   +0.0%  -11.2%    0.02         +1.5%       -4.5%    1017       34%
+               trend-filter-200   +7.0%  -23.9%    0.65        +10.4%      -10.7%     114       99%
+                   equal-weight   +7.8%  -22.8%    0.75        +10.1%      -13.4%      31       99%
+                 trend-ensemble   +7.3%  -22.6%    0.70        +10.6%      -11.6%     198       99%
+              dual-momentum-12m   +6.8%  -33.2%    0.54         +8.3%      -23.5%      85       99%
+                 inverse-vol-60   +4.8%  -19.7%    0.75         +6.9%      -10.9%     163       98%
+     buy & hold IVV (benchmark)  +14.3%  -33.9%    0.89        +16.0%      -18.7%       1      100%
+  equal-weight hold (benchmark)   +9.3%  -26.4%    0.77        +12.8%      -14.6%       4      100%
+period 2012-02-08 → 2026-11-13 · holdout from 2022-06-07
