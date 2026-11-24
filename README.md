@@ -1,5 +1,7 @@
 # Tulip 🌷
 
+[![CI](https://github.com/Blacklotus89898/Tulip/actions/workflows/ci.yaml/badge.svg)](https://github.com/Blacklotus89898/Tulip/actions/workflows/ci.yaml)
+
 Human-approved trading agent. **Claude proposes; Thorn disposes; the journal
 remembers.**
 
@@ -171,21 +173,40 @@ Questrade's API is **read-only for retail clients**, so Tulip never trades:
 
 (Canada constraints baked in: no Alpaca live, no Wealthsimple API — see ADR 0001.)
 
-## Layout (as it lands)
+Beside the TSX desk, a second **paper desk for US-listed ETFs** is in progress
+([ADR 0006](docs/adr/0006-ibkr-us-paper-desk.md), Proposed; live IBKR needs its own ADR).
+
+## Run locally
+
+```bash
+go test ./...
+go run . backtest -compare     # reproduce the strategy choice (docs/backtests)
+go run .                       # paper mode; config by flags/env (see "Operating it")
+```
+
+## Layout
 
 ```
-main.go                 # entrypoint: flags, lifecycle
+main.go                 # entrypoint: flags, lifecycle, Anthropic client (proposals in, never out to brokers)
+tools.go, copilot.go    # MCP tool table, Questrade co-pilot
+backtest.go             # backtest CLI
 internal/loop/          # the autonomy: wake → observe → think → gate → suggest
-internal/brain/         # Anthropic API client; proposals in, never out to brokers
 internal/thorn/         # the deterministic risk gate
-internal/broker/        # paper fills
+internal/approval/      # approve page + passphrase check
+internal/desk/          # suggest → approve (paper) / reconcile (co-pilot); one desk per exchange
+internal/broker/        # broker interface + paper fills
 internal/questrade/     # read-only Questrade client (accounts, balances, positions, executions)
-internal/desk/          # suggest → approve (paper) / reconcile (co-pilot)
-internal/marketdata/    # interface: free quotes/candles today, subscriptions later
+internal/calendar/      # exchange calendars (TSX, NYSE)
+internal/marketdata/    # quotes/candles
+internal/strategy/      # allocators + the shared Rebalance
+internal/backtest/      # backtester
+internal/portfolio/, internal/shadow/   # positions, shadow books (ADR 0004)
 internal/journal/       # append-only SQLite registry (the product)
 internal/notify/        # ntfy suggestion pages with action buttons
 internal/mcp/           # supervision surface (streamable HTTP)
+internal/web/           # approve + /charts pages
 docs/adr/               # decision log — read 0001 before the code
+docs/backtests/         # committed backtest results
 ```
 
 ## Deployment
@@ -195,3 +216,12 @@ Built and operated through the Homelab platform golden path: GitHub Actions
 `https://tulip.lab.home`. Secrets (`ANTHROPIC_API_KEY`, broker keys) live only
 as SealedSecrets in the Homelab repo — nothing secret-shaped ever lands in
 this public repo.
+
+## Docs
+
+- [docs/adr/](docs/adr/README.md) — decision records 0001–0006 with status
+- [docs/backtests/](docs/backtests/README.md) — why the current strategy was chosen
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) first — it is the guide for humans and coding agents alike: commands, layout, the rules that must not break, how to add a feature and how changes ship. Money-touching rules (Thorn, approvals, read-only Questrade) are non-negotiable.
