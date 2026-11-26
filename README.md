@@ -195,3 +195,8 @@ Built and operated through the Homelab platform golden path: GitHub Actions
 `https://tulip.lab.home`. Secrets (`ANTHROPIC_API_KEY`, broker keys) live only
 as SealedSecrets in the Homelab repo — nothing secret-shaped ever lands in
 this public repo.
+
+Pages on `https://tulip.lab.home` (LAN only): `/` redirects to
+[`/charts`](https://tulip.lab.home/charts); [`/scorecard`](https://tulip.lab.home/scorecard);
+`/approve/{id}` and `/killswitch` (operator only, passphrase-gated); `/health`.
+`POST /mcp` needs the MCP bearer token.
